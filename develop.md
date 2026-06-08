@@ -115,3 +115,163 @@
 3. SASRec 少量 epoch 预测趋于均匀
 4. 用户/物品特征利用不充分
 5. 可尝试集成融合、贝叶斯优化、Qwen embedding
+
+---
+
+# 技术文档 V1 — Bandit-Guided + Optuna-Driven Agent
+
+## 目标
+
+将 V0 的规则式 Agent 升级为：
+
+```text
+Rule-Based Agent (V0)
+    ↓
+Bandit-Guided Agent (V1)
+    ↓
+Optuna-Driven Agent (V1)
+    ↓
+Memory-Augmented Agent (V1)
+```
+
+架构：**Bandit 选模型 → Optuna 调超参 → Reflection 评估决策**
+
+---
+
+## Milestone 1 — 增强实验记忆
+
+**修改**: `memory.py`
+
+- `ExperimentRecord` 增加 `exp_id`, `task`, `timestamp`, `status` 字段
+- `ExperimentMemory` 增加:
+  - `save(path)` / `load(path)` — JSON 持久化
+  - `get_best(task)` — 返回指定任务最佳记录
+  - `get_last_k(k)` — 返回最近 k 条
+  - `get_by_model(model)` — 按模型筛选
+
+---
+
+## Milestone 2 — 增强预算管理
+
+**修改**: `budget_manager.py`
+
+- `should_continue()` — 综合判断（时间 + 无提升轮数）
+- `can_run(config)` — 预估能否跑完一轮
+- `remaining_budget()` — 结构化预算信息
+- `record_improvement(improved)` — 追踪无提升轮数
+- 停止条件: `no_improvement_rounds >= 5` 或 `remaining_time < 10min`
+
+---
+
+## Milestone 3 — UCB Bandit 规划器
+
+**新建**: `planner/bandit.py`, `planner/bandit_planner.py`
+
+- `UCBBandit`:
+  - `select_arm()` — UCB 公式选臂
+  - `update(arm, reward)` — 更新统计
+  - UCB = `mean_reward + c * sqrt(log(t) / n)`
+- 分类臂: `["GCN", "GraphSAGE", "GAT"]`
+- 推荐臂: `["Popularity", "ItemCF", "BPR_MF", "SASRec"]`
+- `BanditPlanner` 替代原 `Planner`
+
+---
+
+## Milestone 4 — Optuna 超参搜索
+
+**新建**: `search/search_space.py`, `search/objective.py`, `search/optuna_planner.py`
+
+- 分类搜索空间: `model_type`, `hidden_dim`, `num_layers`, `dropout`, `lr`, `weight_decay`
+- 推荐搜索空间: `embedding_dim`, `lr`, `batch_size`, `l2`
+- `OptunaPlanner.next_config()` — 从 Study 采样
+- `OptunaPlanner.update_result()` — 更新 Study
+
+---
+
+## Milestone 5 — LightGCN
+
+**新建**: `models/recommendation/lightgcn.py`
+
+- `fit()` / `predict()` / `recommend_topk()`
+- 超参: `embedding_dim`, `num_layers`, `lr`, `weight_decay`
+- 注册到 `RecommenderSystem`
+
+---
+
+## Milestone 6 — Feedback Analyzer V2
+
+**修改**: `feedback_analyzer.py`
+
+- 分析: `metric_delta`, `training_time`, `improvement_rate`, `variance`
+- 输出: `{trend, risk, recommendation}`
+- 识别: `improving` / `plateau` / `overfitting` / `unstable`
+
+---
+
+## Milestone 7 — 检索记忆
+
+**新建**: `memory/vector_store.py`, `memory/retriever.py`
+
+- `ConfigEncoder` — 配置编码为向量
+- `Retriever.top_k_similar(config, k=5)` — 返回最相似历史实验
+
+---
+
+## Milestone 8 — 反思 Agent
+
+**新建**: `analysis/reflection.py`
+
+- 输入: `recent_experiments`, `feedback`
+- 输出: `{observation, reasoning, next_action, confidence}`
+- 参与 `planner.next_config()` 决策
+
+---
+
+## Milestone 9 — 轨迹合规
+
+**修改**: `trajectory_logger.py`
+
+- 日志结构: `{round, config, metric, feedback, decision, runtime}`
+- 保存: `output/trajectory_classification.json`, `output/trajectory_recommendation.json`
+- 每轮完整可复现
+
+---
+
+## V1 最终架构
+
+```text
+ExperimentMemory (M1)
+        ↓
+BanditPlanner (M3) — 选模型
+        ↓
+OptunaPlanner (M4) — 调超参
+        ↓
+ExperimentRunner — 训练+评估
+        ↓
+FeedbackAnalyzer V2 (M6) — 趋势分析
+        ↓
+ReflectionAgent (M8) — 反思决策
+        ↓
+TrajectoryLogger V2 (M9) — 日志记录
+        ↓
+Retriever (M7) — 检索相似实验
+```
+
+---
+
+## 依赖新增
+
+```bash
+pip install optuna
+```
+
+---
+
+## 运行
+
+```bash
+python run_classification.py
+python run_recommendation.py
+```
+
+自动完成: 数据加载 → 实验选择 → 训练 → 验证 → 反馈分析 → 策略更新 → 日志记录 → 提交文件生成

@@ -36,7 +36,7 @@ CLS_SEARCH_SPACE = {
 
 # ── 推荐超参搜索空间 ─────────────────────────────────
 REC_SEARCH_SPACE = {
-    "model_type": ["Popularity", "ItemCF", "BPR_MF", "SASRec"],
+    "model_type": ["Popularity", "ItemCF", "BPR_MF", "SASRec", "LightGCN"],
     "embedding_dim": [32, 64, 128],
     "lr": [0.001, 0.005, 0.01],
     "epochs": [50, 100],

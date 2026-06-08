@@ -12,6 +12,11 @@ from torch.utils.data import Dataset, DataLoader
 
 from data_loader import parse_seq_dedup, parse_seq_counts
 
+# LightGCN 延迟导入（避免循环依赖）
+def _import_lightgcn():
+    from models.recommendation.lightgcn import LightGCN as _LightGCN, train_lightgcn as _train, build_adj_matrix as _build_adj
+    return _LightGCN, _train, _build_adj
+
 
 # ============================================================
 # 基线：Popularity
@@ -363,6 +368,40 @@ class RecommenderSystem:
                 epochs=self.kwargs.get("epochs", 50),
                 batch_size=self.kwargs.get("batch_size", 256),
             )
+
+        elif self.model_type == "LightGCN":
+            LightGCNModel, train_lightgcn_fn, build_adj_fn = _import_lightgcn()
+            embedding_dim = self.kwargs.get("embedding_dim", 64)
+            num_layers = self.kwargs.get("num_layers", 3)
+            num_users = len(self.user2idx)
+
+            # 构建交互列表
+            interactions = []
+            for _, row in train_df.iterrows():
+                uid = row["uid"]
+                target = row["target_iid"]
+                if uid in self.user2idx and target in self.item2idx:
+                    interactions.append((self.user2idx[uid], self.item2idx[target]))
+
+            # 构建归一化邻接矩阵
+            adj_norm = build_adj_fn(interactions, num_users, num_items)
+
+            self.model = LightGCNModel(num_users, num_items, embedding_dim, num_layers)
+            self._adj_norm = adj_norm
+            self._interactions = interactions
+            self._num_users = num_users
+
+            train_lightgcn_fn(
+                self.model,
+                interactions,
+                num_users,
+                num_items,
+                adj_norm,
+                lr=self.kwargs.get("lr", 0.001),
+                weight_decay=self.kwargs.get("weight_decay", 1e-5),
+                epochs=self.kwargs.get("epochs", 50),
+                batch_size=self.kwargs.get("batch_size", 512),
+            )
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
@@ -404,5 +443,24 @@ class RecommenderSystem:
                         logits[0, idx - 1] = float("-inf")
                 top_indices = logits.topk(top_k).indices.numpy()[0]
             return [self.idx2item.get(int(idx) + 1, self.all_iid[0]) for idx in top_indices]
+
+        elif self.model_type == "LightGCN":
+            u_idx = self.user2idx.get(uid, 0)
+            user_tensor = torch.tensor([u_idx], dtype=torch.long)
+            item_tensor = torch.arange(self.model.num_items, dtype=torch.long)
+
+            self.model.eval()
+            with torch.no_grad():
+                user_emb, item_emb = self.model(user_tensor, item_tensor, self._adj_norm)
+                scores = (user_emb * item_emb).squeeze(0).sum(dim=1)
+
+                # 排除已交互物品
+                seq_set = {self.item2idx.get(iid, -1) for iid in seq_dedup}
+                for idx in seq_set:
+                    if 0 <= idx < len(scores):
+                        scores[idx] = float("-inf")
+
+                top_indices = scores.topk(top_k).indices.numpy()
+            return [self.idx2item.get(int(idx), self.all_iid[0]) for idx in top_indices]
 
         return self.all_iid[:top_k]
