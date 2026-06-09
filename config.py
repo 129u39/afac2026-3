@@ -22,7 +22,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 TOTAL_BUDGET_SECONDS = 7200  # 2小时
 SAFETY_MARGIN_SECONDS = 300  # 预留5分钟生成提交
 
-# ── 分类超参搜索空间（V4 分层策略）─────────────────
+# ── 分类超参搜索空间（分层策略）──────────────────
 # 主力: APPNP (0.50) > GraphSAGE (0.30) > GCN (0.15) > GCNII (0.03) > MLP (0.02)
 # GAT 已退出主搜索空间（测试 0.47，收益有限）
 CLS_SEARCH_SPACE = {

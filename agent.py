@@ -1,4 +1,4 @@
-"""Agent 主控 V3：Compute-Aware AutoML Agent。"""
+"""Agent 主控：Compute-Aware AutoML Agent。"""
 
 import time
 import torch
@@ -42,11 +42,11 @@ except ImportError:
 
 
 class Agent:
-    """自动化实验 Agent V3 — Compute-Aware AutoML Agent。
+    """自动化实验 Agent — Compute-Aware AutoML Agent。
 
-    V3 架构：
+    架构：
     1. TopK Pool — 维护最优配置池
-    2. GraphSAGE Local Search — 80% 聚焦 GraphSAGE
+    2. 分层模型策略 — APPNP/GraphSAGE/GCN 分层搜索
     3. Compute-Aware Reward — reward = accuracy_gain / runtime
     4. Ensemble Builder — Top-K 模型集成
 
@@ -80,7 +80,7 @@ class Agent:
         self.analyzer = FeedbackAnalyzer()
         self.logger = TrajectoryLogger(output_dir, task_name=task_type)
 
-        # V3 新组件
+        # 核心组件
         self.bandit_planner = BanditPlanner(task_type, seed=config.SEED)
         self.retriever = Retriever(task_type)
         self.knowledge_base = KnowledgeBase(f"{output_dir}/knowledge_base.json")
@@ -139,7 +139,7 @@ class Agent:
                   f"训练集: {len(self._data['train_df'])}, "
                   f"测试集: {len(self._data['test_df'])}")
 
-        # V3: 分析数据特征
+        # 分析数据特征
         self._data_profile = self.adaptive_strategy.analyze(self._data, self.task_type)
         strategy = self.adaptive_strategy.get_search_strategy(self._data_profile)
         print(f"\n[Agent] 数据画像:")
@@ -157,7 +157,7 @@ class Agent:
         qwen_status = "启用" if self.qwen_client and self.qwen_client.available else "未启用"
         optuna_status = "启用" if self.optuna_planner else "未启用"
         topk_status = "启用" if self.topk_pool else "未启用"
-        print(f"\n[Agent] 开始 V3 实验循环，预算: {self.budget.total_seconds}s")
+        print(f"\n[Agent] 开始实验循环，预算: {self.budget.total_seconds}s")
         print(f"  Bandit: UCB (c=1.5) + Compute-Aware Reward")
         print(f"  Optuna: {optuna_status}")
         print(f"  TopK Pool: {topk_status}")
@@ -166,12 +166,12 @@ class Agent:
 
         round_num = 0
         while self.budget.should_continue():
-            # 1. Bandit 选择模型（V3: Compute-Aware Reward）
+            # 1. Bandit 选择模型（Compute-Aware Reward）
             self.bandit_planner._update_bandit_from_memory(self.memory)
             selected_arm = self.bandit_planner.bandit.select_arm()
 
-            # 2. 生成候选配置（V3: 优先从 TopK Pool 生成）
-            candidate_configs = self._generate_candidates_v3(selected_arm)
+            # 2. 生成候选配置（优先从 TopK Pool 生成）
+            candidate_configs = self._generate_candidates(selected_arm)
 
             # 3. 获取反思
             feedback = self.analyzer.analyze(self.memory, self.task_type)
@@ -263,7 +263,7 @@ class Agent:
                     config_dict["_optuna_trial_number"], result.metric
                 )
 
-            # 10. 更新 TopK Pool (V3)
+            # 10. 更新 TopK Pool
             if self.topk_pool:
                 self.topk_pool.add(
                     config=config_dict,
@@ -273,7 +273,7 @@ class Agent:
                     round_num=round_num,
                 )
 
-            # 11. 更新 Bandit (V3: Compute-Aware Reward)
+            # 11. 更新 Bandit (Compute-Aware Reward)
             self.bandit_planner.bandit.update_compute_aware(
                 arm=model_type,
                 metric=result.metric,
@@ -281,7 +281,7 @@ class Agent:
                 runtime=result.train_time,
             )
 
-            # 12. 添加到 Ensemble (V3)
+            # 12. 添加到 Ensemble
             if result.model is not None:
                 self.ensemble.add_model(
                     model=result.model,
@@ -299,7 +299,7 @@ class Agent:
                 insights=[reflection_result.observation] if reflection_result else [],
             ))
 
-            # 14. V3: 提取实验模式
+            # 14. 提取实验模式
             patterns = self.pattern_extractor.extract(self.memory, self.task_type)
             if patterns:
                 print(f"  模式: {patterns[0].description[:60]}...")
@@ -342,7 +342,7 @@ class Agent:
         print(f"\n[Agent] 实验结束，共 {round_num} 轮")
         print(self.memory.summary())
 
-        # 构建集成模型 (V3)
+        # 构建集成模型
         self._build_ensemble()
 
         return {
@@ -351,8 +351,8 @@ class Agent:
             "num_rounds": round_num,
         }
 
-    def _generate_candidates_v3(self, model_type: str) -> list[dict]:
-        """V3 生成候选配置。
+    def _generate_candidates(self, model_type: str) -> list[dict]:
+        """生成候选配置。
 
         优先级：
         1. TopK Pool 中的配置（80%）
@@ -383,7 +383,7 @@ class Agent:
         return candidates[:5]
 
     def _build_ensemble(self):
-        """V3: 构建集成模型。"""
+        """构建集成模型。"""
         if len(self.ensemble) < 2:
             print("[Agent] 模型数量不足，跳过集成")
             return
@@ -406,7 +406,7 @@ class Agent:
         from data_loader import classification_to_pyg
         pyg_data = classification_to_pyg(data, self.device)
 
-        # V3: 优先使用集成模型
+        # 优先使用集成模型
         if len(self.ensemble) >= 2:
             print("  使用集成模型预测")
             predictions = self.ensemble.predict_cls(pyg_data, self.device)
@@ -430,7 +430,7 @@ class Agent:
             uid = row["uid"]
             seq = parse_seq_dedup(row["item_seq_dedup"])
 
-            # V3: 优先使用集成模型
+            # 优先使用集成模型
             if len(self.ensemble) >= 2:
                 pred_list = self.ensemble.predict_rec(uid, seq, top_k=10)
             elif self._best_model is not None:

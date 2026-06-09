@@ -8,7 +8,7 @@ from memory import ExperimentMemory
 from feedback_analyzer import FeedbackAnalyzer
 
 
-# 分类任务默认配置模板（V4 分层策略）
+# 分类任务默认配置模板（分层策略）
 CLS_DEFAULTS = {
     # 主力模型：APPNP（稀疏图最佳，测试 0.6191）
     "APPNP": {"hidden_dim": 256, "num_layers": 2, "dropout": 0.2, "lr": 0.005, "weight_decay": 5e-4, "K": 10, "alpha": 0.1, "epochs": 200, "patience": 30},
@@ -53,7 +53,7 @@ class BanditPlanner:
         self.rng = random.Random(seed)
 
         # 根据任务类型初始化 Bandit 臂
-        # V4: 分层策略 - GAT 退出主搜索空间
+        # 分层策略 - GAT 退出主搜索空间
         if task_type == "classification":
             arms = ["APPNP", "GraphSAGE", "GCN", "GCNII", "MLP"]
         else:

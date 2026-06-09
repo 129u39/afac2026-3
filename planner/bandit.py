@@ -82,7 +82,7 @@ class UCBBandit:
     def update_compute_aware(self, arm: str, metric: float, best_metric: float, runtime: float):
         """Compute-Aware 奖励更新。
 
-        V3 新增：reward = (metric - best_metric) / runtime
+        reward = (metric - best_metric) / runtime
         优先选择快速提升的配置。
 
         Args:

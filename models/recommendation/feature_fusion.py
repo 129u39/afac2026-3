@@ -1,6 +1,6 @@
 """Feature Fusion：融合用户/物品特征的推荐模型。
 
-V4 最重要新增：利用 user.csv 和 item.csv 中的特征。
+利用 user.csv 和 item.csv 中的特征进行推荐。
 """
 
 import torch

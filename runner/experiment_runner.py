@@ -12,14 +12,14 @@ from models.recommender import RecommenderSystem
 from data_loader import classification_to_pyg
 from evaluate import evaluate_classification, evaluate_recommendation
 
-# V4 新模型
+# 新模型
 try:
     from models.appnp import APPNP, train_appnp
     from models.gcnii import GCNII, train_gcnii
     from models.mlp_baseline import MLPBaseline, train_mlp
-    HAS_V4_MODELS = True
+    HAS_NEW_MODELS = True
 except ImportError:
-    HAS_V4_MODELS = False
+    HAS_NEW_MODELS = False
 
 
 @dataclass
@@ -89,11 +89,11 @@ class ExperimentRunner:
         pyg_data = classification_to_pyg(data, self.device)
         model_type = config.get("model_type", "GCN")
 
-        # V4: 启用 AMP 和 TF32
+        # 启用 AMP 和 TF32
         enable_tf32()
 
         # 根据模型类型创建模型
-        if model_type == "APPNP" and HAS_V4_MODELS:
+        if model_type == "APPNP" and HAS_NEW_MODELS:
             model = APPNP(
                 in_dim=data["num_features"],
                 hidden_dim=config.get("hidden_dim", 64),
@@ -110,7 +110,7 @@ class ExperimentRunner:
                 epochs=config.get("epochs", 200),
                 patience=config.get("patience", 30),
             )
-        elif model_type == "GCNII" and HAS_V4_MODELS:
+        elif model_type == "GCNII" and HAS_NEW_MODELS:
             model = GCNII(
                 in_dim=data["num_features"],
                 hidden_dim=config.get("hidden_dim", 64),
@@ -127,7 +127,7 @@ class ExperimentRunner:
                 epochs=config.get("epochs", 200),
                 patience=config.get("patience", 30),
             )
-        elif model_type == "MLP" and HAS_V4_MODELS:
+        elif model_type == "MLP" and HAS_NEW_MODELS:
             model = MLPBaseline(
                 in_dim=data["num_features"],
                 hidden_dim=config.get("hidden_dim", 64),

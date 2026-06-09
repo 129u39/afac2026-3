@@ -123,7 +123,7 @@ class OptunaPlanner:
     def _sample_cls_config(self, trial) -> dict:
         """分类任务采样。
 
-        V4: 使用统一搜索空间，避免 Optuna 动态空间报错。
+        使用统一搜索空间，避免 Optuna 动态空间报错。
         如果 Bandit 已选择模型，使用 Bandit 的选择；否则随机采样。
         """
         import random
@@ -132,7 +132,7 @@ class OptunaPlanner:
         if self._current_model_type:
             model_type = self._current_model_type
         else:
-            # V4: 分层模型策略（基于测试结果）
+            # 分层模型策略（基于测试结果）
             model_weights = {
                 "APPNP": 0.50,      # 主力模型：稀疏图最佳
                 "GraphSAGE": 0.30,  # 次主模型：稳定可靠
