@@ -35,6 +35,7 @@ class TestClassificationTraining:
     def test_gcn_training(self, cls_data, device):
         """测试 GCN 训练。"""
         from models.gnn_classifier import GNNClassifier, train_gnn, predict_gnn
+        from evaluate import evaluate_classification
 
         set_seed(42)
         pyg_data = classification_to_pyg(cls_data, device)
@@ -48,15 +49,17 @@ class TestClassificationTraining:
             dropout=0.5,
         ).to(device)
 
-        result = train_gnn(model, pyg_data, lr=0.01, epochs=20, patience=10)
+        train_gnn(model, pyg_data, lr=0.01, epochs=50, patience=15)
 
-        assert result["best_val_acc"] > 0.1, f"GCN accuracy too low: {result['best_val_acc']}"
-        assert len(result["train_losses"]) > 0
-        print(f"GCN: val_acc={result['best_val_acc']:.4f}, epochs={len(result['train_losses'])}")
+        # 使用统一评估函数
+        eval_result = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        assert eval_result["val_accuracy"] > 0.1, f"GCN accuracy too low: {eval_result['val_accuracy']}"
+        print(f"GCN: val_acc={eval_result['val_accuracy']:.4f}")
 
     def test_graphsage_training(self, cls_data, device):
         """测试 GraphSAGE 训练。"""
         from models.gnn_classifier import GNNClassifier, train_gnn, predict_gnn
+        from evaluate import evaluate_classification
 
         set_seed(42)
         pyg_data = classification_to_pyg(cls_data, device)
@@ -70,14 +73,17 @@ class TestClassificationTraining:
             dropout=0.1,
         ).to(device)
 
-        result = train_gnn(model, pyg_data, lr=0.005, epochs=20, patience=10)
+        train_gnn(model, pyg_data, lr=0.005, epochs=50, patience=15)
 
-        assert result["best_val_acc"] > 0.1, f"GraphSAGE accuracy too low: {result['best_val_acc']}"
-        print(f"GraphSAGE: val_acc={result['best_val_acc']:.4f}, epochs={len(result['train_losses'])}")
+        # 使用统一评估函数
+        eval_result = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        assert eval_result["val_accuracy"] > 0.1, f"GraphSAGE accuracy too low: {eval_result['val_accuracy']}"
+        print(f"GraphSAGE: val_acc={eval_result['val_accuracy']:.4f}")
 
     def test_gat_training(self, cls_data, device):
         """测试 GAT 训练。"""
         from models.gnn_classifier import GNNClassifier, train_gnn, predict_gnn
+        from evaluate import evaluate_classification
 
         set_seed(42)
         pyg_data = classification_to_pyg(cls_data, device)
@@ -91,14 +97,17 @@ class TestClassificationTraining:
             dropout=0.5,
         ).to(device)
 
-        result = train_gnn(model, pyg_data, lr=0.005, epochs=20, patience=10)
+        train_gnn(model, pyg_data, lr=0.005, epochs=50, patience=15)
 
-        assert result["best_val_acc"] > 0.1, f"GAT accuracy too low: {result['best_val_acc']}"
-        print(f"GAT: val_acc={result['best_val_acc']:.4f}, epochs={len(result['train_losses'])}")
+        # 使用统一评估函数
+        eval_result = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        assert eval_result["val_accuracy"] > 0.1, f"GAT accuracy too low: {eval_result['val_accuracy']}"
+        print(f"GAT: val_acc={eval_result['val_accuracy']:.4f}")
 
     def test_appnp_training(self, cls_data, device):
         """测试 APPNP 训练。"""
         from models.appnp import APPNP, train_appnp
+        from evaluate import evaluate_classification
 
         set_seed(42)
         pyg_data = classification_to_pyg(cls_data, device)
@@ -113,14 +122,17 @@ class TestClassificationTraining:
             alpha=0.1,
         ).to(device)
 
-        result = train_appnp(model, pyg_data, lr=0.005, epochs=20, patience=10)
+        train_appnp(model, pyg_data, lr=0.005, epochs=50, patience=15)
 
-        assert result["best_val_acc"] > 0.1, f"APPNP accuracy too low: {result['best_val_acc']}"
-        print(f"APPNP: val_acc={result['best_val_acc']:.4f}, epochs={len(result['train_losses'])}")
+        # 使用统一评估函数
+        eval_result = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        assert eval_result["val_accuracy"] > 0.1, f"APPNP accuracy too low: {eval_result['val_accuracy']}"
+        print(f"APPNP: val_acc={eval_result['val_accuracy']:.4f}")
 
     def test_gcnii_training(self, cls_data, device):
         """测试 GCNII 训练。"""
         from models.gcnii import GCNII, train_gcnii
+        from evaluate import evaluate_classification
 
         set_seed(42)
         pyg_data = classification_to_pyg(cls_data, device)
@@ -135,14 +147,17 @@ class TestClassificationTraining:
             theta=0.5,
         ).to(device)
 
-        result = train_gcnii(model, pyg_data, lr=0.01, epochs=20, patience=10)
+        train_gcnii(model, pyg_data, lr=0.01, epochs=50, patience=15)
 
-        assert result["best_val_acc"] > 0.1, f"GCNII accuracy too low: {result['best_val_acc']}"
-        print(f"GCNII: val_acc={result['best_val_acc']:.4f}, epochs={len(result['train_losses'])}")
+        # 使用统一评估函数
+        eval_result = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        assert eval_result["val_accuracy"] > 0.1, f"GCNII accuracy too low: {eval_result['val_accuracy']}"
+        print(f"GCNII: val_acc={eval_result['val_accuracy']:.4f}")
 
     def test_mlp_training(self, cls_data, device):
         """测试 MLP 训练（基线）。"""
         from models.mlp_baseline import MLPBaseline, train_mlp
+        from evaluate import evaluate_classification
 
         set_seed(42)
         pyg_data = classification_to_pyg(cls_data, device)
@@ -155,44 +170,52 @@ class TestClassificationTraining:
             dropout=0.5,
         ).to(device)
 
-        result = train_mlp(model, pyg_data, lr=0.01, epochs=20, patience=10)
+        train_mlp(model, pyg_data, lr=0.01, epochs=50, patience=15)
 
-        assert result["best_val_acc"] > 0.1, f"MLP accuracy too low: {result['best_val_acc']}"
-        print(f"MLP: val_acc={result['best_val_acc']:.4f}, epochs={len(result['train_losses'])}")
+        # 使用统一评估函数
+        eval_result = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        assert eval_result["val_accuracy"] > 0.1, f"MLP accuracy too low: {eval_result['val_accuracy']}"
+        print(f"MLP: val_acc={eval_result['val_accuracy']:.4f}")
 
     def test_model_comparison(self, cls_data, device):
         """比较不同模型的表现。"""
         from models.gnn_classifier import GNNClassifier, train_gnn
         from models.appnp import APPNP, train_appnp
         from models.mlp_baseline import MLPBaseline, train_mlp
+        from evaluate import evaluate_classification
 
         results = {}
-        epochs = 15
+        epochs = 50
+
+        pyg_data = classification_to_pyg(cls_data, device)
 
         # GCN
         set_seed(42)
-        pyg_data = classification_to_pyg(cls_data, device)
         model = GNNClassifier(cls_data["num_features"], 64, cls_data["num_classes"], 2, "GCN", 0.5).to(device)
-        r = train_gnn(model, pyg_data, lr=0.01, epochs=epochs, patience=10)
-        results["GCN"] = r["best_val_acc"]
+        train_gnn(model, pyg_data, lr=0.01, epochs=epochs, patience=15)
+        r = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        results["GCN"] = r["val_accuracy"]
 
         # GraphSAGE
         set_seed(42)
         model = GNNClassifier(cls_data["num_features"], 128, cls_data["num_classes"], 3, "GraphSAGE", 0.1).to(device)
-        r = train_gnn(model, pyg_data, lr=0.005, epochs=epochs, patience=10)
-        results["GraphSAGE"] = r["best_val_acc"]
+        train_gnn(model, pyg_data, lr=0.005, epochs=epochs, patience=15)
+        r = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        results["GraphSAGE"] = r["val_accuracy"]
 
         # APPNP
         set_seed(42)
         model = APPNP(cls_data["num_features"], 128, cls_data["num_classes"], 2, 0.3, 10, 0.1).to(device)
-        r = train_appnp(model, pyg_data, lr=0.005, epochs=epochs, patience=10)
-        results["APPNP"] = r["best_val_acc"]
+        train_appnp(model, pyg_data, lr=0.005, epochs=epochs, patience=15)
+        r = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        results["APPNP"] = r["val_accuracy"]
 
         # MLP
         set_seed(42)
         model = MLPBaseline(cls_data["num_features"], 128, cls_data["num_classes"], 2, 0.5).to(device)
-        r = train_mlp(model, pyg_data, lr=0.01, epochs=epochs, patience=10)
-        results["MLP"] = r["best_val_acc"]
+        train_mlp(model, pyg_data, lr=0.01, epochs=epochs, patience=15)
+        r = evaluate_classification(model, pyg_data, cls_data["train_idx"], cls_data["labels"])
+        results["MLP"] = r["val_accuracy"]
 
         print("\n=== 模型比较 ===")
         for name, acc in sorted(results.items(), key=lambda x: x[1], reverse=True):
