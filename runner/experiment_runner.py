@@ -1,0 +1,136 @@
+"""统一实验运行器：封装分类和推荐实验的执行。"""
+
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+import torch
+
+from models.utils import set_seed, get_device
+from models.gnn_classifier import GNNClassifier, train_gnn, predict_gnn
+from models.recommender import RecommenderSystem
+from data_loader import classification_to_pyg
+from evaluate import evaluate_classification, evaluate_recommendation
+
+
+@dataclass
+class ExperimentResult:
+    """实验结果。"""
+    metric: float
+    train_time: float
+    model_name: str
+    config: dict
+    metrics: dict = field(default_factory=dict)
+    model: Any = None
+    status: str = "success"
+    error: str = ""
+
+
+class ExperimentRunner:
+    """统一实验运行器。
+
+    封装分类和推荐实验的执行逻辑，提供统一的 run(config) 接口。
+    """
+
+    def __init__(self, task_type: str, data: dict, device: torch.device | None = None):
+        """
+        Args:
+            task_type: "classification" 或 "recommendation"
+            data: 已加载的数据字典
+            device: 计算设备
+        """
+        self.task_type = task_type
+        self.data = data
+        self.device = device or get_device()
+
+    def run(self, config: dict) -> ExperimentResult:
+        """执行实验。
+
+        Args:
+            config: 实验配置，必须包含 model_type
+
+        返回:
+            ExperimentResult
+        """
+        model_type = config.get("model_type", "unknown")
+        start_time = time.time()
+
+        try:
+            if self.task_type == "classification":
+                result = self._run_classification(config)
+            else:
+                result = self._run_recommendation(config)
+
+            result.train_time = time.time() - start_time
+            return result
+
+        except Exception as e:
+            return ExperimentResult(
+                metric=0.0,
+                train_time=time.time() - start_time,
+                model_name=model_type,
+                config=config,
+                status="failed",
+                error=str(e),
+            )
+
+    def _run_classification(self, config: dict) -> ExperimentResult:
+        """执行分类实验。"""
+        data = self.data
+        pyg_data = classification_to_pyg(data, self.device)
+        model_type = config.get("model_type", "GCN")
+
+        model = GNNClassifier(
+            in_dim=data["num_features"],
+            hidden_dim=config.get("hidden_dim", 64),
+            num_classes=data["num_classes"],
+            num_layers=config.get("num_layers", 2),
+            model_type=model_type,
+            dropout=config.get("dropout", 0.5),
+        ).to(self.device)
+
+        train_result = train_gnn(
+            model, pyg_data,
+            lr=config.get("lr", 0.01),
+            weight_decay=config.get("weight_decay", 5e-4),
+            epochs=config.get("epochs", 200),
+            patience=config.get("patience", 30),
+        )
+
+        eval_result = evaluate_classification(
+            model, pyg_data, data["train_idx"], data["labels"]
+        )
+
+        return ExperimentResult(
+            metric=eval_result["val_accuracy"],
+            train_time=0.0,  # 由调用方设置
+            model_name=model_type,
+            config=config,
+            metrics={
+                "val_accuracy": eval_result["val_accuracy"],
+                "train_loss": train_result["train_losses"][-1] if train_result["train_losses"] else 0,
+            },
+            model=model,
+        )
+
+    def _run_recommendation(self, config: dict) -> ExperimentResult:
+        """执行推荐实验。"""
+        model_type = config.get("model_type", "Popularity")
+        kwargs = {k: v for k, v in config.items() if k != "model_type"}
+
+        rec_sys = RecommenderSystem(model_type=model_type, **kwargs)
+        rec_sys.fit(self.data)
+
+        eval_result = evaluate_recommendation(rec_sys, self.data)
+
+        return ExperimentResult(
+            metric=eval_result["ndcg@k"],
+            train_time=0.0,  # 由调用方设置
+            model_name=model_type,
+            config=config,
+            metrics={
+                "ndcg@k": eval_result["ndcg@k"],
+                "hit@k": eval_result["hit@k"],
+            },
+            model=rec_sys,
+        )
