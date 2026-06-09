@@ -79,6 +79,31 @@ class UCBBandit:
         self.arms[arm].total_reward += reward
         self.total_pulls += 1
 
+    def update_compute_aware(self, arm: str, metric: float, best_metric: float, runtime: float):
+        """Compute-Aware 奖励更新。
+
+        V3 新增：reward = (metric - best_metric) / runtime
+        优先选择快速提升的配置。
+
+        Args:
+            arm: 臂名称
+            metric: 当前指标
+            best_metric: 历史最佳指标
+            runtime: 运行时间（秒）
+        """
+        if arm not in self.arms:
+            raise ValueError(f"Unknown arm: {arm}")
+
+        # 计算 compute-aware reward
+        if runtime > 0:
+            reward = max(0, metric - best_metric) / runtime
+        else:
+            reward = 0.0
+
+        self.arms[arm].pulls += 1
+        self.arms[arm].total_reward += reward
+        self.total_pulls += 1
+
     def get_stats(self) -> dict:
         """返回所有臂的统计信息。"""
         return {

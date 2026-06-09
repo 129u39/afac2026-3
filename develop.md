@@ -620,6 +620,248 @@ python run_all.py
 | SASRec 训练慢 (~74s) | 已跳过 | 优化 DataLoader |
 | LightGCN 稀疏矩阵慢 | 已修复 coalesce | 需要更大规模测试 |
 | 用户/物品特征未使用 | 未实现 | P2: 特征融合 |
-| 模型集成融合 | 未实现 | P3: Top-K Blending |
+| 模型集成融合 | V3 已实现 | Top-K Blending |
 | Qwen API 调用延迟 | 已有 fallback | 优化 prompt 长度 |
+
+---
+
+# 技术文档 V3 — Compute-Aware AutoML Agent
+
+## 目标
+
+从"Agent驱动实验"升级为"Agent驱动大规模搜索"：
+
+```text
+Agent-Driven Experiment (V2)
+    ↓
+Compute-Aware AutoML (V3) ← 当前
+```
+
+核心目标：**充分利用120分钟预算，最大化Leaderboard分数**
+
+---
+
+## V3 架构
+
+```text
+                ┌─────────────┐
+                │ Qwen Planner│
+                └──────┬──────┘
+                       │
+                       ▼
+          ┌─────────────────────────┐
+          │ Search Space Generator  │
+          └──────────┬──────────────┘
+                     │
+                     ▼
+              ┌────────────┐
+              │ Optuna TPE │
+              └─────┬──────┘
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+ Successive Halving       Random Explore
+        │                       │
+        └───────────┬───────────┘
+                    ▼
+             TopK Candidate Pool
+                    │
+                    ▼
+             Qwen Reflection
+                    │
+                    ▼
+             Search Space Update
+                    │
+                    ▼
+               Final Ensemble
+```
+
+---
+
+## V3 模块 1 — TopK Candidate Pool
+
+### search/topk_pool.py
+
+```python
+class TopKPool:
+    def add(config, metric, model_name, train_time)
+    def get_top_k(k=5) → list[dict]
+    def get_focus_configs(n=10, focus_ratio=0.8) → list[dict]
+```
+
+- 维护 Top20 配置（按 metric 排序）
+- 80% 搜索围绕 TopK，20% 随机探索
+- 持久化到 `output/top_pool_{task}.json`
+
+---
+
+## V3 模块 2 — Successive Halving
+
+### search/successive_halving.py
+
+```python
+class SuccessiveHalving:
+    def run(initial_configs) → list[HalvingResult]
+```
+
+阶段式淘汰：
+
+| 阶段 | Epochs | 配置数 | 保留 |
+|------|--------|--------|------|
+| 筛选 | 5 | 128 | Top 32 |
+| 粗选 | 20 | 32 | Top 8 |
+| 精选 | 100 | 8 | Top 3 |
+| 最终 | 300 | 3 | Top 1 |
+
+收益：**GPU利用率最大化**
+
+---
+
+## V3 模块 3 — Compute-Aware Reward
+
+### planner/bandit.py
+
+```python
+def update_compute_aware(arm, metric, best_metric, runtime):
+    reward = max(0, metric - best_metric) / runtime
+```
+
+| 实验 | 提升 | 耗时 | Reward |
+|------|------|------|--------|
+| A | +0.01 | 2s | 0.005 |
+| B | +0.015 | 60s | 0.00025 |
+
+**优先选择快速提升的配置**
+
+---
+
+## V3 模块 4 — GraphSAGE Local Search
+
+### search/optuna_planner.py
+
+```python
+# V3: 80% 概率采样 GraphSAGE
+if random.random() < 0.8:
+    model_type = "GraphSAGE"
+```
+
+GraphSAGE 专用搜索空间：
+
+| 参数 | 范围 |
+|------|------|
+| hidden_dim | 128, 256, 512 |
+| num_layers | 2, 3, 4 |
+| dropout | 0.0, 0.05, 0.1, 0.2 |
+| lr | 5e-4 ~ 3e-3 |
+
+---
+
+## V3 模块 5 — Ensemble Builder
+
+### models/ensemble.py
+
+```python
+class EnsembleBuilder:
+    def add_model(model, config, metric)
+    def build(weights="metric")
+    def predict_cls(data) → np.ndarray
+    def predict_rec(uid, seq, top_k) → list[str]
+```
+
+集成策略：
+
+| 任务 | 方法 |
+|------|------|
+| 分类 | softmax 概率加权平均 |
+| 推荐 | 分数向量加权平均 |
+
+权重策略：
+- `equal`: 等权重
+- `metric`: 按指标加权
+- `softmax`: softmax 归一化
+
+---
+
+## V3 主循环
+
+### agent.py
+
+```python
+while budget.should_continue():
+    # 1. Bandit 选择模型（Compute-Aware Reward）
+    model = bandit.select()
+
+    # 2. 生成候选配置（TopK Pool 优先）
+    candidates = generate_candidates_v3(model)
+
+    # 3. Qwen 反思
+    reflection = reflection_agent.reflect(...)
+
+    # 4. Qwen 最终决策
+    config = qwen_planner.select(candidates, reflection)
+
+    # 5. 执行实验
+    result = runner.run(config)
+
+    # 6. 更新所有组件
+    memory.add(result)
+    topk_pool.add(result)
+    bandit.update_compute_aware(result)
+    ensemble.add_model(result.model)
+    logger.log(...)
+
+# 实验结束后
+ensemble.build()
+generate_submission()  # 使用集成模型
+```
+
+---
+
+## V3 依赖
+
+```bash
+uv pip install dashscope openai pydantic optuna
+```
+
+---
+
+## V3 运行
+
+```bash
+# 设置 API Key（可选）
+export DASHSCOPE_API_KEY=sk-xxx
+
+# 运行
+python run_all.py
+```
+
+---
+
+## V3 新增文件
+
+| 文件 | 功能 |
+|------|------|
+| `search/topk_pool.py` | Top-K 配置池 |
+| `search/successive_halving.py` | 渐进式淘汰搜索 |
+| `models/ensemble.py` | 模型集成构建器 |
+
+## V3 修改文件
+
+| 文件 | 变更 |
+|------|------|
+| `agent.py` | 集成 TopK Pool + Ensemble + Compute-Aware Reward |
+| `planner/bandit.py` | 新增 `update_compute_aware()` |
+| `search/optuna_planner.py` | GraphSAGE 优先采样 |
+
+---
+
+## V3 预期收益
+
+| 改进 | 预期收益 |
+|------|----------|
+| TopK Pool | 搜索效率提升 3-5x |
+| Compute-Aware Reward | 快速筛选高价值配置 |
+| GraphSAGE Focus | 集中资源在最优模型 |
+| Ensemble | +1%~5% 最终分数 |
+| Successive Halving | GPU 利用率最大化 |
 | 跨任务知识迁移 | 已有框架 | P3: 完善迁移策略 |

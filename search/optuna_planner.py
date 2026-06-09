@@ -121,13 +121,36 @@ class OptunaPlanner:
             return self._sample_rec_config(trial)
 
     def _sample_cls_config(self, trial) -> dict:
-        """分类任务采样。"""
+        """分类任务采样。
+
+        V3: 80% 概率采样 GraphSAGE，20% 其他模型。
+        GraphSAGE 专用搜索空间：hidden_dim [128,256,512], num_layers [2,3,4]
+        """
+        # V3: GraphSAGE 优先
+        import random
+        if random.random() < 0.8:
+            model_type = "GraphSAGE"
+        else:
+            model_type = trial.suggest_categorical("model_type", ["GCN", "GAT"])
+
+        # GraphSAGE 专用搜索空间
+        if model_type == "GraphSAGE":
+            hidden_dim = trial.suggest_categorical("hidden_dim", [128, 256, 512])
+            num_layers = trial.suggest_int("num_layers", 2, 4)
+            dropout = trial.suggest_float("dropout", 0.0, 0.2, step=0.05)
+            lr = trial.suggest_float("lr", 5e-4, 3e-3, log=True)
+        else:
+            hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
+            num_layers = trial.suggest_int("num_layers", 2, 3)
+            dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
+            lr = trial.suggest_float("lr", 1e-3, 1e-2, log=True)
+
         return {
-            "model_type": trial.suggest_categorical("model_type", ["GCN", "GAT", "GraphSAGE"]),
-            "hidden_dim": trial.suggest_categorical("hidden_dim", [64, 128, 256]),
-            "num_layers": trial.suggest_int("num_layers", 2, 3),
-            "dropout": trial.suggest_float("dropout", 0.0, 0.5, step=0.1),
-            "lr": trial.suggest_float("lr", 1e-3, 1e-2, log=True),
+            "model_type": model_type,
+            "hidden_dim": hidden_dim,
+            "num_layers": num_layers,
+            "dropout": dropout,
+            "lr": lr,
             "weight_decay": trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True),
             "epochs": 200,
             "patience": 30,
