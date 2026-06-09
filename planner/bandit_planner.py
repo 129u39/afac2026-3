@@ -47,7 +47,7 @@ class BanditPlanner:
 
         # 根据任务类型初始化 Bandit 臂
         if task_type == "classification":
-            arms = ["GCN", "GAT", "GraphSAGE"]
+            arms = ["GCN", "GAT", "GraphSAGE", "APPNP", "GCNII", "MLP"]
         else:
             arms = ["Popularity", "ItemCF", "BPR_MF"]
 

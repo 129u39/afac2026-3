@@ -864,4 +864,169 @@ python run_all.py
 | GraphSAGE Focus | 集中资源在最优模型 |
 | Ensemble | +1%~5% 最终分数 |
 | Successive Halving | GPU 利用率最大化 |
+
+---
+
+# 技术文档 V4 — 模型族扩展 + 特征融合
+
+## 目标
+
+从单一模型搜索扩展到多模型族搜索：
+
+```text
+V3: GraphSAGE Focus
+    ↓
+V4: GraphSAGE + APPNP + GCNII + MLP + Feature Fusion ← 当前
+```
+
+核心升级：
+1. 分类：新增 APPNP（稀疏图）、GCNII（深层GNN）、MLP（基线验证）
+2. 推荐：新增特征融合模型，利用 user/item 特征
+3. 训练：AMP 混合精度加速
+
+---
+
+## V4 新增模型
+
+### 分类模型
+
+| 模型 | 特点 | 适用场景 |
+|------|------|----------|
+| **GraphSAGE** | 邻居采样聚合 | 通用，稀疏图 |
+| **APPNP** | MLP + PPR 传播 | 稀疏图，弱连接图 |
+| **GCNII** | 初始残差 + 恒等映射 | 深层 GNN，解决过平滑 |
+| **MLP** | 纯 MLP，不使用图 | 基线验证 |
+
+### 推荐模型
+
+| 模型 | 特点 | 适用场景 |
+|------|------|----------|
+| **LightGCN** | 图卷积 | 通用 |
+| **FeatureFusion** | 图嵌入 + 特征嵌入 | 有用户/物品特征 |
+| **Reranker** | 重排序优化 NDCG | 召回后优化 |
+
+---
+
+## V4 分类搜索空间
+
+| 模型 | 参数 | 范围 |
+|------|------|------|
+| GraphSAGE | hidden_dim | 128, 256, 512 |
+| | num_layers | 2, 3, 4 |
+| | dropout | 0.0 ~ 0.2 |
+| APPNP | hidden_dim | 64, 128, 256 |
+| | K (传播步数) | 5 ~ 15 |
+| | alpha (重启概率) | 0.05 ~ 0.2 |
+| GCNII | hidden_dim | 64, 128, 256 |
+| | num_layers | 4 ~ 16 |
+| | alpha | 0.05 ~ 0.2 |
+| | theta | 0.3 ~ 0.7 |
+| MLP | hidden_dim | 64, 128, 256 |
+| | num_layers | 2, 4 |
+
+---
+
+## V4 推荐特征融合
+
+### FeatureFusionModel
+
+```python
+final_emb = graph_emb + α * feature_emb
+```
+
+- `graph_emb`: LightGCN 学习的图嵌入
+- `feature_emb`: UserEncoder/ItemEncoder 学习的特征嵌入
+- `α`: 融合权重（默认 0.3）
+
+### 特征编码器
+
+```python
+class UserEncoder:
+    def forward(user_idx, user_features) → user_embedding
+
+class ItemEncoder:
+    def forward(item_idx, item_features) → item_embedding
+```
+
+---
+
+## V4 训练优化
+
+### AMP 混合精度
+
+```python
+from models.utils import enable_amp, enable_tf32
+
+# 启用 TF32（Ampere+ GPU）
+enable_tf32()
+
+# 启用 AMP
+scaler = enable_amp()
+```
+
+### 自动 Batch Size
+
+```python
+from models.utils import get_optimal_batch_size
+
+batch_size = get_optimal_batch_size(model, device)
+# 根据 GPU 显存自动选择：16GB→1024, 8GB→512, 4GB→256
+```
+
+---
+
+## V4 新增文件
+
+| 文件 | 功能 |
+|------|------|
+| `models/appnp.py` | APPNP 模型（稀疏图） |
+| `models/gcnii.py` | GCNII 模型（深层 GNN） |
+| `models/mlp_baseline.py` | MLP 基线模型 |
+| `models/recommendation/feature_fusion.py` | 特征融合推荐模型 |
+| `models/recommendation/rerank.py` | 重排序优化器 |
+
+## V4 修改文件
+
+| 文件 | 变更 |
+|------|------|
+| `models/utils.py` | 新增 AMP、TF32、自动 Batch Size |
+| `planner/bandit_planner.py` | 新增 APPNP、GCNII、MLP 臂 |
+| `search/optuna_planner.py` | 新增模型搜索空间 |
+| `runner/experiment_runner.py` | 支持新模型训练 |
+
+---
+
+## V4 运行
+
+```bash
+python run_all.py
+```
+
+输出示例：
+```
+[Agent] 数据画像:
+  特征稀疏度: 82.2%
+  类别不平衡度: 17.9
+  平均度: 2.0
+
+Round 0: APPNP (适合稀疏图)
+  Config: {'model_type': 'APPNP', 'hidden_dim': 128, 'K': 10, 'alpha': 0.1}
+  metric: 0.2350
+
+Round 1: GraphSAGE
+  Config: {'model_type': 'GraphSAGE', 'hidden_dim': 256, 'num_layers': 3}
+  metric: 0.2412
+```
+
+---
+
+## V4 预期收益
+
+| 改进 | 预期收益 |
+|------|----------|
+| APPNP | 稀疏图 +2%~5% |
+| GCNII | 深层 GNN +1%~3% |
+| MLP 基线 | 验证图结构有效性 |
+| 特征融合 | 推荐 +3%~8% |
+| AMP 加速 | 训练速度 +30%~50% |
 | 跨任务知识迁移 | 已有框架 | P3: 完善迁移策略 |

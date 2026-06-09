@@ -6,11 +6,20 @@ from typing import Any
 
 import torch
 
-from models.utils import set_seed, get_device
+from models.utils import set_seed, get_device, enable_amp, enable_tf32
 from models.gnn_classifier import GNNClassifier, train_gnn, predict_gnn
 from models.recommender import RecommenderSystem
 from data_loader import classification_to_pyg
 from evaluate import evaluate_classification, evaluate_recommendation
+
+# V4 新模型
+try:
+    from models.appnp import APPNP, train_appnp
+    from models.gcnii import GCNII, train_gcnii
+    from models.mlp_baseline import MLPBaseline, train_mlp
+    HAS_V4_MODELS = True
+except ImportError:
+    HAS_V4_MODELS = False
 
 
 @dataclass
@@ -80,22 +89,76 @@ class ExperimentRunner:
         pyg_data = classification_to_pyg(data, self.device)
         model_type = config.get("model_type", "GCN")
 
-        model = GNNClassifier(
-            in_dim=data["num_features"],
-            hidden_dim=config.get("hidden_dim", 64),
-            num_classes=data["num_classes"],
-            num_layers=config.get("num_layers", 2),
-            model_type=model_type,
-            dropout=config.get("dropout", 0.5),
-        ).to(self.device)
+        # V4: 启用 AMP 和 TF32
+        enable_tf32()
 
-        train_result = train_gnn(
-            model, pyg_data,
-            lr=config.get("lr", 0.01),
-            weight_decay=config.get("weight_decay", 5e-4),
-            epochs=config.get("epochs", 200),
-            patience=config.get("patience", 30),
-        )
+        # 根据模型类型创建模型
+        if model_type == "APPNP" and HAS_V4_MODELS:
+            model = APPNP(
+                in_dim=data["num_features"],
+                hidden_dim=config.get("hidden_dim", 64),
+                num_classes=data["num_classes"],
+                num_layers=config.get("num_layers", 2),
+                dropout=config.get("dropout", 0.5),
+                K=config.get("K", 10),
+                alpha=config.get("alpha", 0.1),
+            ).to(self.device)
+            train_result = train_appnp(
+                model, pyg_data,
+                lr=config.get("lr", 0.01),
+                weight_decay=config.get("weight_decay", 5e-4),
+                epochs=config.get("epochs", 200),
+                patience=config.get("patience", 30),
+            )
+        elif model_type == "GCNII" and HAS_V4_MODELS:
+            model = GCNII(
+                in_dim=data["num_features"],
+                hidden_dim=config.get("hidden_dim", 64),
+                num_classes=data["num_classes"],
+                num_layers=config.get("num_layers", 4),
+                dropout=config.get("dropout", 0.5),
+                alpha=config.get("alpha", 0.1),
+                theta=config.get("theta", 0.5),
+            ).to(self.device)
+            train_result = train_gcnii(
+                model, pyg_data,
+                lr=config.get("lr", 0.01),
+                weight_decay=config.get("weight_decay", 5e-4),
+                epochs=config.get("epochs", 200),
+                patience=config.get("patience", 30),
+            )
+        elif model_type == "MLP" and HAS_V4_MODELS:
+            model = MLPBaseline(
+                in_dim=data["num_features"],
+                hidden_dim=config.get("hidden_dim", 64),
+                num_classes=data["num_classes"],
+                num_layers=config.get("num_layers", 2),
+                dropout=config.get("dropout", 0.5),
+            ).to(self.device)
+            train_result = train_mlp(
+                model, pyg_data,
+                lr=config.get("lr", 0.01),
+                weight_decay=config.get("weight_decay", 5e-4),
+                epochs=config.get("epochs", 200),
+                patience=config.get("patience", 30),
+            )
+        else:
+            # GCN, GAT, GraphSAGE
+            model = GNNClassifier(
+                in_dim=data["num_features"],
+                hidden_dim=config.get("hidden_dim", 64),
+                num_classes=data["num_classes"],
+                num_layers=config.get("num_layers", 2),
+                model_type=model_type,
+                dropout=config.get("dropout", 0.5),
+            ).to(self.device)
+            train_result = train_gnn(
+                model, pyg_data,
+                lr=config.get("lr", 0.01),
+                weight_decay=config.get("weight_decay", 5e-4),
+                epochs=config.get("epochs", 200),
+                patience=config.get("patience", 30),
+            )
 
         eval_result = evaluate_classification(
             model, pyg_data, data["train_idx"], data["labels"]

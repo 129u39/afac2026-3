@@ -123,29 +123,57 @@ class OptunaPlanner:
     def _sample_cls_config(self, trial) -> dict:
         """分类任务采样。
 
-        V3: 80% 概率采样 GraphSAGE，20% 其他模型。
-        GraphSAGE 专用搜索空间：hidden_dim [128,256,512], num_layers [2,3,4]
+        V4: 支持 GraphSAGE, APPNP, GCNII, MLP 等多种模型。
         """
-        # V3: GraphSAGE 优先
         import random
-        if random.random() < 0.8:
-            model_type = "GraphSAGE"
-        else:
-            model_type = trial.suggest_categorical("model_type", ["GCN", "GAT"])
 
-        # GraphSAGE 专用搜索空间
+        # V4: 模型选择概率
+        model_weights = {
+            "GraphSAGE": 0.5,
+            "APPNP": 0.2,
+            "GCNII": 0.15,
+            "GCN": 0.05,
+            "GAT": 0.05,
+            "MLP": 0.05,
+        }
+        model_type = random.choices(
+            list(model_weights.keys()),
+            weights=list(model_weights.values()),
+            k=1
+        )[0]
+
+        # 根据模型类型选择搜索空间
         if model_type == "GraphSAGE":
             hidden_dim = trial.suggest_categorical("hidden_dim", [128, 256, 512])
             num_layers = trial.suggest_int("num_layers", 2, 4)
             dropout = trial.suggest_float("dropout", 0.0, 0.2, step=0.05)
             lr = trial.suggest_float("lr", 5e-4, 3e-3, log=True)
-        else:
+        elif model_type == "APPNP":
+            hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
+            num_layers = trial.suggest_int("num_layers", 2, 3)
+            dropout = trial.suggest_float("dropout", 0.0, 0.3, step=0.05)
+            lr = trial.suggest_float("lr", 1e-3, 5e-3, log=True)
+            K = trial.suggest_int("K", 5, 15)
+            alpha = trial.suggest_float("alpha", 0.05, 0.2, step=0.05)
+        elif model_type == "GCNII":
+            hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
+            num_layers = trial.suggest_int("num_layers", 4, 16)
+            dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
+            lr = trial.suggest_float("lr", 1e-3, 1e-2, log=True)
+            alpha = trial.suggest_float("alpha", 0.05, 0.2, step=0.05)
+            theta = trial.suggest_float("theta", 0.3, 0.7, step=0.1)
+        elif model_type == "MLP":
+            hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
+            num_layers = trial.suggest_int("num_layers", 2, 4)
+            dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
+            lr = trial.suggest_float("lr", 1e-3, 1e-2, log=True)
+        else:  # GCN, GAT
             hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
             num_layers = trial.suggest_int("num_layers", 2, 3)
             dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
             lr = trial.suggest_float("lr", 1e-3, 1e-2, log=True)
 
-        return {
+        config = {
             "model_type": model_type,
             "hidden_dim": hidden_dim,
             "num_layers": num_layers,
@@ -155,6 +183,16 @@ class OptunaPlanner:
             "epochs": 200,
             "patience": 30,
         }
+
+        # 添加模型特有参数
+        if model_type == "APPNP":
+            config["K"] = K
+            config["alpha"] = alpha
+        elif model_type == "GCNII":
+            config["alpha"] = alpha
+            config["theta"] = theta
+
+        return config
 
     def _sample_rec_config(self, trial) -> dict:
         """推荐任务采样。
