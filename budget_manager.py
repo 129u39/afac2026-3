@@ -10,7 +10,7 @@ class BudgetManager:
         self,
         total_seconds: int = 7200,
         safety_margin: int = 300,
-        max_no_improve_rounds: int = 5,
+        max_no_improve_rounds: int = 10,
         min_remaining_seconds: int = 600,
     ):
         """
