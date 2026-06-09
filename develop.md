@@ -275,3 +275,351 @@ python run_recommendation.py
 ```
 
 自动完成: 数据加载 → 实验选择 → 训练 → 验证 → 反馈分析 → 策略更新 → 日志记录 → 提交文件生成
+
+---
+
+# 技术文档 V2 — LLM-Agent（Qwen 驱动）
+
+## 目标
+
+将 V1 的规则式反思和规划升级为 LLM 驱动的决策闭环：
+
+```text
+Rule-Based Agent (V0)
+    ↓
+Bandit-Guided Agent (V1)
+    ↓
+LLM-Agent (V2) ← 当前
+```
+
+核心升级：**Qwen LLM 参与反思和最终决策**
+
+---
+
+## 架构
+
+### 三层决策
+
+```text
+BanditPlanner → 选择模型家族（UCB）
+    ↓
+OptunaPlanner → 生成 Top-K 候选配置（TPE）
+    ↓
+QwenPlanner → 最终决策（LLM 选择最优候选）
+```
+
+### 反馈闭环
+
+```text
+实验 → 观察 → 反思(Qwen) → 规划(Qwen) → 实验
+```
+
+---
+
+## 目录结构
+
+```text
+afac2026-3/
+
+agent.py                    # 主控 Agent V2
+
+llm/
+├── client.py               # QwenClient (DashScope API)
+├── schemas.py              # Pydantic 结构化输出
+├── parser.py               # JSON 提取 + 校验
+└── prompts.py              # 提示词模板
+
+planner/
+├── bandit.py               # UCB 多臂老虎机
+├── bandit_planner.py       # Bandit 规划器
+├── optuna_planner.py       # Optuna 超参搜索
+└── qwen_planner.py         # Qwen 最终决策器
+
+memory/
+├── __init__.py             # ExperimentRecord + ExperimentMemory
+├── vector_store.py         # 向量存储
+├── retriever.py            # 实验检索
+└── knowledge_base.py       # 跨任务知识库
+
+analysis/
+├── feedback.py             # 反馈分析器
+└── reflection.py           # 反思 Agent (规则 + Qwen)
+
+runner/
+└── experiment_runner.py    # 统一实验运行器
+
+budget/
+└── budget_manager.py       # 预算管理
+
+logger/
+└── trajectory_logger.py    # 轨迹日志
+
+models/
+├── gnn_classifier.py       # GCN/GAT/GraphSAGE
+├── recommender.py          # Popularity/ItemCF/BPR-MF/SASRec
+└── recommendation/
+    └── lightgcn.py         # LightGCN
+```
+
+---
+
+## 1. LLM 集成
+
+### llm/client.py
+
+```python
+class QwenClient:
+    BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    def chat(system_prompt, user_prompt, model="qwen-plus") → str
+```
+
+- 使用 DashScope OpenAI 兼容接口
+- 环境变量: `DASHSCOPE_API_KEY`
+- 无 API Key 时自动 fallback 到规则模式
+
+---
+
+### llm/schemas.py
+
+Pydantic 结构化输出：
+
+```python
+class ReflectionResult:
+    observation: str     # 观察
+    reasoning: str       # 推理
+    next_action: str     # 行动建议
+    confidence: float    # 置信度
+
+class PlannerDecision:
+    selected_config: dict  # 选中的配置
+    reason: str            # 选择原因
+    confidence: float      # 置信度
+
+class StopDecision:
+    should_stop: bool
+    reason: str
+
+class ResearchResult:
+    findings: list[str]
+    suggestions: list[str]
+    risk_assessment: str
+```
+
+---
+
+### llm/parser.py
+
+```python
+parse_structured(response_text, schema_class) → Pydantic | None
+```
+
+提取策略：
+1. 直接解析整个响应
+2. 提取 ` ```json ... ``` ` 代码块
+3. 提取 `{ ... }` JSON 对象
+
+---
+
+### llm/prompts.py
+
+提示词模板：
+
+| 模板 | 用途 |
+|------|------|
+| `SYSTEM_PROMPT` | 系统角色设定 |
+| `REFLECTION_PROMPT` | 反思生成 |
+| `PLANNER_PROMPT` | 配置选择 |
+| `STOP_PROMPT` | 停止判断 |
+| `KNOWLEDGE_PROMPT` | 知识提取 |
+
+---
+
+## 2. Qwen Planner
+
+### planner/qwen_planner.py
+
+```python
+class QwenPlanner:
+    def select(candidate_configs, reflection, budget, history) → PlannerDecision
+```
+
+职责：
+- 从 Bandit + Optuna 的候选配置中做最终选择
+- **不直接生成参数**，而是在候选中选择最合适的
+- 结合反思结果和预算状态做决策
+
+---
+
+## 3. 反思 Agent V2
+
+### analysis/reflection.py
+
+双模式：
+
+| 模式 | 条件 | 行为 |
+|------|------|------|
+| Qwen | API Key 可用 | 调用 LLM 生成深度反思 |
+| 规则 | API Key 不可用 | 基于规则的快速反思（fallback） |
+
+```python
+class ReflectionAgent:
+    def reflect(memory, feedback, task_type, similar_experiments, budget_state) → ReflectionResult
+```
+
+---
+
+## 4. 知识库
+
+### memory/knowledge_base.py
+
+跨任务经验存储：
+
+```python
+class KnowledgeBase:
+    def add(entry)              # 添加知识
+    def get_relevant_knowledge(task_type, model)  # 检索相关知识
+    def format_for_prompt(task_type)  # 格式化为提示词
+```
+
+示例：
+```json
+{
+  "GraphSAGE": {
+    "classification": {"best_metric": 0.2285, "insights": ["3层优于2层"]},
+    "recommendation": {"best_metric": 0.13, "insights": ["可迁移到图推荐"]}
+  }
+}
+```
+
+---
+
+## 5. 实验运行器
+
+### runner/experiment_runner.py
+
+```python
+class ExperimentRunner:
+    def run(config) → ExperimentResult
+
+class ExperimentResult:
+    metric: float
+    train_time: float
+    model_name: str
+    config: dict
+    metrics: dict
+    model: Any
+    status: str
+```
+
+---
+
+## 6. 主循环
+
+### agent/main_agent.py
+
+```python
+while budget.should_continue():
+    # 1. Bandit 选择模型
+    model = bandit.select()
+
+    # 2. Optuna 生成候选配置
+    candidates = optuna.next_configs(model)
+
+    # 3. Qwen 反思
+    reflection = reflection_agent.reflect(memory, feedback)
+
+    # 4. Qwen 最终决策
+    config = qwen_planner.select(candidates, reflection)
+
+    # 5. 执行实验
+    result = runner.run(config)
+
+    # 6. 分析反馈
+    feedback = analyzer.analyze(result)
+
+    # 7. 更新所有组件
+    memory.add(result)
+    bandit.update(...)
+    optuna.update(...)
+    knowledge_base.add(...)
+    logger.log(...)
+```
+
+---
+
+## 7. 依赖
+
+```bash
+uv pip install dashscope openai pydantic optuna
+```
+
+---
+
+## 8. 运行
+
+```bash
+# 设置 API Key（可选，无则使用规则模式）
+export DASHSCOPE_API_KEY=sk-xxx
+
+# 运行
+python run_all.py
+```
+
+---
+
+## 9. V1 → V2 变更清单
+
+| 文件 | 变更 |
+|------|------|
+| `agent.py` | 重写：集成 QwenPlanner + KnowledgeBase |
+| `analysis/reflection.py` | 升级：双模式（Qwen + 规则） |
+| `requirements.txt` | 新增：dashscope, openai, pydantic |
+
+| 文件 | 新增 |
+|------|------|
+| `llm/client.py` | QwenClient |
+| `llm/schemas.py` | Pydantic 模型 |
+| `llm/parser.py` | 输出解析器 |
+| `llm/prompts.py` | 提示词模板 |
+| `planner/qwen_planner.py` | Qwen 规划器 |
+| `memory/knowledge_base.py` | 知识库 |
+| `runner/experiment_runner.py` | 统一运行器 |
+
+---
+
+## 10. V2 实验结果
+
+### 分类任务
+
+| 突破 | Accuracy | 模型 |
+|------|----------|------|
+| 1st | 0.2154 | GCN |
+| 2nd | 0.2217 | GraphSAGE |
+| 3rd | **0.2285** | GraphSAGE (高正则) |
+
+### 推荐任务
+
+| 突破 | NDCG@k | 模型 |
+|------|--------|------|
+| 1st | 0.1247 | Popularity |
+| 2nd | **0.1328** | ItemCF |
+
+### 综合得分
+
+```
+最终得分 = 0.5 × 0.2285 + 0.5 × 0.1328 = 0.1807
+```
+
+---
+
+## 11. 已知限制与后续优化
+
+| 问题 | 状态 | 计划 |
+|------|------|------|
+| SASRec 训练慢 (~74s) | 已跳过 | 优化 DataLoader |
+| LightGCN 稀疏矩阵慢 | 已修复 coalesce | 需要更大规模测试 |
+| 用户/物品特征未使用 | 未实现 | P2: 特征融合 |
+| 模型集成融合 | 未实现 | P3: Top-K Blending |
+| Qwen API 调用延迟 | 已有 fallback | 优化 prompt 长度 |
+| 跨任务知识迁移 | 已有框架 | P3: 完善迁移策略 |
