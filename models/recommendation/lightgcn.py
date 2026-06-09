@@ -145,6 +145,7 @@ def build_adj_matrix(
     adj = torch.sparse_coo_tensor(indices, values, (n, n))
 
     # 度矩阵归一化: D^{-1/2} A D^{-1/2}
+    adj = adj.coalesce()
     deg = torch.sparse.sum(adj, dim=1).to_dense()
     deg_inv_sqrt = deg.pow(-0.5)
     deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0.0
@@ -154,7 +155,7 @@ def build_adj_matrix(
     values = adj.values()
     row, col = indices[0], indices[1]
     norm_values = deg_inv_sqrt[row] * values * deg_inv_sqrt[col]
-    adj_norm = torch.sparse_coo_tensor(indices, norm_values, (n, n)).to(device)
+    adj_norm = torch.sparse_coo_tensor(indices, norm_values, (n, n)).to(device).coalesce()
 
     return adj_norm
 

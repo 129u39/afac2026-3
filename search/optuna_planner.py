@@ -17,6 +17,8 @@ class OptunaPlanner:
     与 BanditPlanner 配合使用：
     - BanditPlanner 负责选择模型架构
     - OptunaPlanner 负责在选定模型内搜索最优超参
+
+    对推荐任务，使用固定搜索空间避免动态空间问题。
     """
 
     def __init__(
@@ -26,13 +28,6 @@ class OptunaPlanner:
         storage: str | None = None,
         output_dir: str = "output",
     ):
-        """
-        Args:
-            task_type: "classification" 或 "recommendation"
-            study_name: Optuna Study 名称
-            storage: Optuna 存储路径（None 为内存）
-            output_dir: Study 保存目录
-        """
         if not HAS_OPTUNA:
             raise ImportError("optuna is required. Install with: pip install optuna")
 
@@ -40,7 +35,7 @@ class OptunaPlanner:
         self.output_dir = output_dir
         self.study_name = study_name or f"afac_{task_type}"
 
-        direction = "maximize"  # accuracy 和 ndcg 都是越大越好
+        direction = "maximize"
         self.study = optuna.create_study(
             study_name=self.study_name,
             direction=direction,
@@ -54,14 +49,9 @@ class OptunaPlanner:
         self._current_model_type = model_type
 
     def next_config(self) -> dict:
-        """从 Study 中采样下一组配置。
-
-        返回:
-            config dict
-        """
+        """从 Study 中采样下一组配置。"""
         trial = self.study.ask()
 
-        # 设置模型类型（如果由 Bandit 指定）
         if self._current_model_type:
             trial.set_user_attr("model_type", self._current_model_type)
 
@@ -70,23 +60,12 @@ class OptunaPlanner:
         return config
 
     def update_result(self, trial_number: int, value: float):
-        """更新 trial 的结果。
-
-        Args:
-            trial_number: trial 编号
-            value: 目标值（accuracy 或 ndcg）
-        """
-        trial = self.study.trials[trial_number]
-        self.study.tell(trial, value)
+        """更新 trial 的结果。"""
+        self.study.tell(trial_number, value)
         self._trial_counter += 1
 
     def update_result_by_config(self, config: dict, value: float):
-        """通过配置中的 trial_number 更新结果。
-
-        Args:
-            config: 包含 _optuna_trial_number 的配置
-            value: 目标值
-        """
+        """通过配置中的 trial_number 更新结果。"""
         trial_number = config.get("_optuna_trial_number")
         if trial_number is not None:
             self.update_result(trial_number, value)
@@ -95,8 +74,7 @@ class OptunaPlanner:
         """返回最佳配置。"""
         if not self.study.trials:
             return None
-        best_trial = self.study.best_trial
-        return best_trial.params
+        return self.study.best_trial.params
 
     def best_value(self) -> float:
         """返回最佳目标值。"""
@@ -111,7 +89,6 @@ class OptunaPlanner:
         path = os.path.join(self.output_dir, filename)
         os.makedirs(self.output_dir, exist_ok=True)
 
-        # 序列化 trials 信息
         trials_data = []
         for trial in self.study.trials:
             trials_data.append({
@@ -154,30 +131,36 @@ class OptunaPlanner:
         }
 
     def _sample_rec_config(self, trial) -> dict:
-        """推荐任务采样。"""
+        """推荐任务采样。
+
+        使用固定搜索空间，避免模型切换时 Optuna 动态空间报错。
+        对于简单模型（Popularity/ItemCF），只取 model_type，其余参数忽略。
+        """
         model_type = self._current_model_type or "BPR_MF"
 
         if model_type in ("Popularity", "ItemCF"):
+            # 简单模型无超参，只记录 trial
             return {"model_type": model_type}
 
+        # 统一搜索空间：所有可调模型共用同一套参数名
         embedding_dim = trial.suggest_categorical("embedding_dim", [32, 64, 128])
         lr = trial.suggest_float("lr", 1e-3, 1e-2, log=True)
         weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True)
+        # 统一 batch_size 选项（取所有模型的并集）
+        batch_size = trial.suggest_categorical("batch_size", [128, 256, 512])
+        # num_layers 仅 LightGCN 使用，其他模型忽略
+        num_layers = trial.suggest_int("num_layers", 2, 4)
 
         config = {
             "model_type": model_type,
             "embedding_dim": embedding_dim,
             "lr": lr,
             "weight_decay": weight_decay,
+            "batch_size": batch_size,
             "epochs": 50,
         }
 
-        if model_type in ("BPR_MF", "LightGCN"):
-            config["batch_size"] = trial.suggest_categorical("batch_size", [256, 512])
-        elif model_type == "SASRec":
-            config["batch_size"] = trial.suggest_categorical("batch_size", [128, 256, 512])
-
         if model_type == "LightGCN":
-            config["num_layers"] = trial.suggest_int("num_layers", 2, 4)
+            config["num_layers"] = num_layers
 
         return config

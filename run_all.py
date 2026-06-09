@@ -18,7 +18,7 @@ def main():
     print("=" * 60)
 
     # ── 任务1：产品分类 ──
-    print("\n" + "▶" * 30 + " 产品分类 " + "◀" * 30)
+    print("\n" + ">>>" + " 产品分类 " + "<<<")
     cls_agent = Agent(
         task_type="classification",
         data_path=config.CLS_NPZ,
@@ -35,7 +35,7 @@ def main():
     print(f"\n分类结果: accuracy={cls_result['best_metric']:.4f}")
 
     # ── 任务2：产品推荐 ──
-    print("\n" + "▶" * 30 + " 产品推荐 " + "◀" * 30)
+    print("\n" + ">>>" + " 产品推荐 " + "<<<")
     rec_agent = Agent(
         task_type="recommendation",
         data_path=config.REC_DATA_DIR,

@@ -39,8 +39,12 @@ def evaluate_recommendation(
     rec_data: dict,
     val_ratio: float = 0.2,
     k: int = 10,
+    max_val_samples: int = 1000,
 ) -> dict:
     """从训练集中划分验证集，评估推荐 NDCG@K。
+
+    Args:
+        max_val_samples: 最大验证样本数（控制评估时间）
 
     返回:
         {"ndcg@k": float, "hit@k": float, "val_size": int}
@@ -49,6 +53,10 @@ def evaluate_recommendation(
     train_sub, val_sub = train_test_split(
         train_df, test_size=val_ratio, random_state=42
     )
+
+    # 限制验证集大小以控制评估时间
+    if len(val_sub) > max_val_samples:
+        val_sub = val_sub.sample(n=max_val_samples, random_state=42)
 
     # 在子集上重新 fit
     from models.recommender import RecommenderSystem

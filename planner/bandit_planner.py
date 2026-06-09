@@ -49,7 +49,7 @@ class BanditPlanner:
         if task_type == "classification":
             arms = ["GCN", "GAT", "GraphSAGE"]
         else:
-            arms = ["Popularity", "ItemCF", "BPR_MF", "SASRec", "LightGCN"]
+            arms = ["Popularity", "ItemCF", "BPR_MF"]
 
         self.bandit = UCBBandit(arms=arms, c=c)
         self._last_selected_arm: str | None = None

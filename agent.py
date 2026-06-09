@@ -127,10 +127,11 @@ class Agent:
             print(f"Round {round_num}: {model_type}")
             print(f"  Config: {config_dict}")
 
-            # 2. 检查是否与已有实验过于相似
-            if self.retriever.is_too_similar(config_dict, threshold=0.99):
+            # 2. 检查是否与已有实验过于相似（仅对有超参的模型检查）
+            model_type = config_dict.get("model_type", "")
+            has_hyperparams = model_type not in ("Popularity", "ItemCF")
+            if has_hyperparams and self.retriever.is_too_similar(config_dict, threshold=0.99):
                 print("  [SKIP] 配置与已有实验过于相似，跳过")
-                # 对 Optuna 报告一个低分
                 if self.optuna_planner and "_optuna_trial_number" in config_dict:
                     self.optuna_planner.update_result(
                         config_dict["_optuna_trial_number"], 0.0
