@@ -24,12 +24,12 @@ SAFETY_MARGIN_SECONDS = 300  # 预留5分钟生成提交
 
 # ── 分类超参搜索空间 ─────────────────────────────────
 CLS_SEARCH_SPACE = {
-    "model_type": ["GCN", "GAT", "GraphSAGE"],
-    "hidden_dim": [64, 128, 256],
-    "num_layers": [2, 3],
-    "dropout": [0.0, 0.3, 0.5],
-    "lr": [0.001, 0.005, 0.01],
-    "weight_decay": [0.0, 5e-4],
+    "model_type": ["GCN", "GAT", "GraphSAGE", "APPNP", "GCNII", "MLP"],
+    "hidden_dim": [64, 128, 256, 512],
+    "num_layers": [2, 3, 4],
+    "dropout": [0.0, 0.1, 0.2, 0.3, 0.5],
+    "lr": [5e-4, 1e-3, 2e-3, 5e-3, 1e-2],
+    "weight_decay": [0.0, 1e-5, 5e-5, 1e-4, 5e-4],
     "epochs": [200],
     "patience": [30],
 }

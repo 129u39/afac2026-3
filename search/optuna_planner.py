@@ -123,7 +123,7 @@ class OptunaPlanner:
     def _sample_cls_config(self, trial) -> dict:
         """分类任务采样。
 
-        V4: 支持 GraphSAGE, APPNP, GCNII, MLP 等多种模型。
+        V4: 使用统一搜索空间，避免 Optuna 动态空间报错。
         如果 Bandit 已选择模型，使用 Bandit 的选择；否则随机采样。
         """
         import random
@@ -147,36 +147,17 @@ class OptunaPlanner:
                 k=1
             )[0]
 
-        # 根据模型类型选择搜索空间
-        if model_type == "GraphSAGE":
-            hidden_dim = trial.suggest_categorical("hidden_dim", [128, 256, 512])
-            num_layers = trial.suggest_int("num_layers", 2, 4)
-            dropout = trial.suggest_float("dropout", 0.0, 0.2, step=0.05)
-            lr = trial.suggest_float("lr", 5e-4, 3e-3, log=True)
-        elif model_type == "APPNP":
-            hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
-            num_layers = trial.suggest_int("num_layers", 2, 3)
-            dropout = trial.suggest_float("dropout", 0.0, 0.3, step=0.05)
-            lr = trial.suggest_float("lr", 1e-3, 5e-3, log=True)
-            K = trial.suggest_int("K", 5, 15)
-            alpha = trial.suggest_float("alpha", 0.05, 0.2, step=0.05)
-        elif model_type == "GCNII":
-            hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
-            num_layers = trial.suggest_int("num_layers", 4, 16)
-            dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
-            lr = trial.suggest_float("lr", 1e-3, 1e-2, log=True)
-            alpha = trial.suggest_float("alpha", 0.05, 0.2, step=0.05)
-            theta = trial.suggest_float("theta", 0.3, 0.7, step=0.1)
-        elif model_type == "MLP":
-            hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
-            num_layers = trial.suggest_int("num_layers", 2, 4)
-            dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
-            lr = trial.suggest_float("lr", 1e-3, 1e-2, log=True)
-        else:  # GCN, GAT
-            hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
-            num_layers = trial.suggest_int("num_layers", 2, 3)
-            dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
-            lr = trial.suggest_float("lr", 1e-3, 1e-2, log=True)
+        # 统一搜索空间（所有模型共用）
+        hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256, 512])
+        num_layers = trial.suggest_int("num_layers", 2, 4)
+        dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.05)
+        lr = trial.suggest_float("lr", 5e-4, 1e-2, log=True)
+        weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True)
+
+        # 模型特有参数（所有模型都采样，但只有对应模型会使用）
+        K = trial.suggest_int("K", 5, 15)
+        alpha = trial.suggest_float("alpha", 0.05, 0.2, step=0.05)
+        theta = trial.suggest_float("theta", 0.3, 0.7, step=0.1)
 
         config = {
             "model_type": model_type,
@@ -184,7 +165,7 @@ class OptunaPlanner:
             "num_layers": num_layers,
             "dropout": dropout,
             "lr": lr,
-            "weight_decay": trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True),
+            "weight_decay": weight_decay,
             "epochs": 200,
             "patience": 30,
         }

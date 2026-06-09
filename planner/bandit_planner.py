@@ -12,7 +12,10 @@ from feedback_analyzer import FeedbackAnalyzer
 CLS_DEFAULTS = {
     "GCN": {"hidden_dim": 64, "num_layers": 2, "dropout": 0.5, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
     "GAT": {"hidden_dim": 64, "num_layers": 2, "dropout": 0.5, "lr": 0.005, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
-    "GraphSAGE": {"hidden_dim": 64, "num_layers": 2, "dropout": 0.3, "lr": 0.005, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
+    "GraphSAGE": {"hidden_dim": 128, "num_layers": 3, "dropout": 0.1, "lr": 0.005, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
+    "APPNP": {"hidden_dim": 128, "num_layers": 2, "dropout": 0.3, "lr": 0.005, "weight_decay": 5e-4, "K": 10, "alpha": 0.1, "epochs": 200, "patience": 30},
+    "GCNII": {"hidden_dim": 64, "num_layers": 8, "dropout": 0.5, "lr": 0.01, "weight_decay": 5e-4, "alpha": 0.1, "theta": 0.5, "epochs": 200, "patience": 30},
+    "MLP": {"hidden_dim": 128, "num_layers": 2, "dropout": 0.5, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
 }
 
 # 推荐任务默认配置模板
@@ -133,17 +136,36 @@ class BanditPlanner:
         config["model_type"] = model_type
 
         if self.task_type == "classification":
-            param = self.rng.choice(["hidden_dim", "dropout", "lr", "weight_decay", "num_layers"])
+            # 通用参数
+            params = ["hidden_dim", "dropout", "lr", "weight_decay", "num_layers"]
+
+            # 添加模型特有参数
+            if model_type == "APPNP":
+                params.extend(["K", "alpha"])
+            elif model_type == "GCNII":
+                params.extend(["alpha", "theta"])
+
+            param = self.rng.choice(params)
+
             if param == "hidden_dim":
-                config["hidden_dim"] = self.rng.choice([64, 128, 256])
+                config["hidden_dim"] = self.rng.choice([64, 128, 256, 512])
             elif param == "dropout":
-                config["dropout"] = self.rng.choice([0.0, 0.2, 0.3, 0.5])
+                config["dropout"] = self.rng.choice([0.0, 0.05, 0.1, 0.2, 0.3, 0.5])
             elif param == "lr":
-                config["lr"] = self.rng.choice([0.0005, 0.001, 0.005, 0.01])
+                config["lr"] = self.rng.choice([5e-4, 1e-3, 2e-3, 5e-3, 1e-2])
             elif param == "weight_decay":
-                config["weight_decay"] = self.rng.choice([0.0, 1e-5, 5e-4, 1e-3])
+                config["weight_decay"] = self.rng.choice([0.0, 1e-5, 5e-5, 1e-4, 5e-4])
             elif param == "num_layers":
-                config["num_layers"] = self.rng.choice([2, 3])
+                if model_type == "GCNII":
+                    config["num_layers"] = self.rng.choice([4, 8, 12, 16])
+                else:
+                    config["num_layers"] = self.rng.choice([2, 3, 4])
+            elif param == "K":
+                config["K"] = self.rng.choice([5, 8, 10, 12, 15])
+            elif param == "alpha":
+                config["alpha"] = self.rng.choice([0.05, 0.1, 0.15, 0.2])
+            elif param == "theta":
+                config["theta"] = self.rng.choice([0.3, 0.4, 0.5, 0.6, 0.7])
         else:
             if "embedding_dim" in config:
                 config["embedding_dim"] = self.rng.choice([32, 64, 128])
