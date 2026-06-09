@@ -45,8 +45,8 @@ class GCNII(nn.Module):
 
         # GCNII 层
         self.convs = nn.ModuleList()
-        for _ in range(num_layers):
-            self.convs.append(GCN2Conv(hidden_dim, alpha=alpha, theta=theta))
+        for i in range(num_layers):
+            self.convs.append(GCN2Conv(hidden_dim, alpha=alpha, theta=theta, layer=i + 1))
 
         # 分类器
         self.classifier = nn.Linear(hidden_dim, num_classes)
