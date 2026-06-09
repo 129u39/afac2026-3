@@ -124,23 +124,28 @@ class OptunaPlanner:
         """分类任务采样。
 
         V4: 支持 GraphSAGE, APPNP, GCNII, MLP 等多种模型。
+        如果 Bandit 已选择模型，使用 Bandit 的选择；否则随机采样。
         """
         import random
 
-        # V4: 模型选择概率
-        model_weights = {
-            "GraphSAGE": 0.5,
-            "APPNP": 0.2,
-            "GCNII": 0.15,
-            "GCN": 0.05,
-            "GAT": 0.05,
-            "MLP": 0.05,
-        }
-        model_type = random.choices(
-            list(model_weights.keys()),
-            weights=list(model_weights.values()),
-            k=1
-        )[0]
+        # 如果 Bandit 已选择模型，使用它
+        if self._current_model_type:
+            model_type = self._current_model_type
+        else:
+            # 否则按概率采样
+            model_weights = {
+                "GraphSAGE": 0.5,
+                "APPNP": 0.2,
+                "GCNII": 0.15,
+                "GCN": 0.05,
+                "GAT": 0.05,
+                "MLP": 0.05,
+            }
+            model_type = random.choices(
+                list(model_weights.keys()),
+                weights=list(model_weights.values()),
+                k=1
+            )[0]
 
         # 根据模型类型选择搜索空间
         if model_type == "GraphSAGE":
