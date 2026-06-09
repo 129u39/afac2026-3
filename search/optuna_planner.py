@@ -61,8 +61,11 @@ class OptunaPlanner:
 
     def update_result(self, trial_number: int, value: float):
         """更新 trial 的结果。"""
-        self.study.tell(trial_number, value)
-        self._trial_counter += 1
+        try:
+            self.study.tell(trial_number, value)
+            self._trial_counter += 1
+        except (ValueError, RuntimeError):
+            pass  # trial 已完成或不存在，跳过
 
     def update_result_by_config(self, config: dict, value: float):
         """通过配置中的 trial_number 更新结果。"""
