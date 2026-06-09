@@ -98,7 +98,11 @@ class EnsembleBuilder:
 
         # 加权平均
         avg_probs = torch.stack(all_probs).sum(dim=0)
-        predictions = avg_probs.argmax(dim=1).cpu().numpy()
+
+        # 只返回测试节点的预测
+        test_mask = data.test_mask
+        test_probs = avg_probs[test_mask]
+        predictions = test_probs.argmax(dim=1).cpu().numpy()
 
         return predictions
 
