@@ -8,18 +8,18 @@ from memory import ExperimentMemory
 from feedback_analyzer import FeedbackAnalyzer
 
 
-# 分类任务默认配置模板（分层策略）
+# 分类任务默认配置模板
 CLS_DEFAULTS = {
-    # 主力模型：APPNP（稀疏图最佳，测试 0.6191）
-    "APPNP": {"hidden_dim": 256, "num_layers": 2, "dropout": 0.2, "lr": 0.005, "weight_decay": 5e-4, "K": 10, "alpha": 0.1, "epochs": 200, "patience": 30},
-    # 次主模型：GraphSAGE（稳定可靠，测试 0.5245）
+    # 主力模型：GCNII（真实测试 0.36，最佳）
+    "GCNII": {"hidden_dim": 256, "num_layers": 16, "dropout": 0.3, "lr": 0.01, "weight_decay": 5e-4, "alpha": 0.1, "theta": 0.5, "epochs": 200, "patience": 30},
+    # 主力模型：SIGN（稀疏图专用）
+    "SIGN": {"hidden_dim": 256, "num_hops": 3, "num_layers": 2, "dropout": 0.3, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
+    # 快速模型：SGC
+    "SGC": {"hidden_dim": 256, "K": 2, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
+    # 基线模型：GraphSAGE（真实测试 0.28）
     "GraphSAGE": {"hidden_dim": 128, "num_layers": 3, "dropout": 0.1, "lr": 0.005, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
-    # 基线模型：GCN（快速验证，测试 0.5086）
-    "GCN": {"hidden_dim": 64, "num_layers": 2, "dropout": 0.5, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
-    # 研究模型：GCNII（深层GNN，测试 0.3909）
-    "GCNII": {"hidden_dim": 64, "num_layers": 8, "dropout": 0.5, "lr": 0.01, "weight_decay": 5e-4, "alpha": 0.1, "theta": 0.5, "epochs": 200, "patience": 30},
-    # 监控模型：MLP（验证图贡献，测试 0.3691）
-    "MLP": {"hidden_dim": 128, "num_layers": 2, "dropout": 0.5, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
+    # 基线模型：MLP（真实测试 0.31）
+    "MLP": {"hidden_dim": 256, "num_layers": 2, "dropout": 0.3, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
 }
 
 # 推荐任务默认配置模板
@@ -53,11 +53,10 @@ class BanditPlanner:
         self.rng = random.Random(seed)
 
         # 根据任务类型初始化 Bandit 臂
-        # 分层策略 - GAT 退出主搜索空间
         if task_type == "classification":
-            arms = ["APPNP", "GraphSAGE", "GCN", "GCNII", "MLP"]
+            arms = ["GCNII", "SIGN", "SGC", "GraphSAGE", "MLP"]
         else:
-            arms = ["Popularity", "ItemCF", "BPR_MF"]
+            arms = ["LightGCN", "SASRec", "BPR_MF", "ItemCF"]
 
         self.bandit = UCBBandit(arms=arms, c=c)
         self._last_selected_arm: str | None = None

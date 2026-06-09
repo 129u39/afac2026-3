@@ -17,6 +17,8 @@ try:
     from models.appnp import APPNP, train_appnp
     from models.gcnii import GCNII, train_gcnii
     from models.mlp_baseline import MLPBaseline, train_mlp
+    from models.sign import SIGN, precompute_sign_features, train_sign
+    from models.sgc import SGC, precompute_sgc_features, train_sgc
     HAS_NEW_MODELS = True
 except ImportError:
     HAS_NEW_MODELS = False
@@ -87,36 +89,72 @@ class ExperimentRunner:
         """执行分类实验。"""
         data = self.data
         pyg_data = classification_to_pyg(data, self.device)
-        model_type = config.get("model_type", "GCN")
+        model_type = config.get("model_type", "GCNII")
 
         # 启用 AMP 和 TF32
         enable_tf32()
 
         # 根据模型类型创建模型
-        if model_type == "APPNP" and HAS_NEW_MODELS:
-            model = APPNP(
+        if model_type == "SIGN" and HAS_NEW_MODELS:
+            # SIGN: 预计算多跳特征
+            num_hops = config.get("num_hops", 3)
+            hop_features = precompute_sign_features(
+                data["adj_csr"], data["features"].toarray(), num_hops
+            )
+            hop_features = [f.to(self.device) for f in hop_features]
+
+            model = SIGN(
                 in_dim=data["num_features"],
-                hidden_dim=config.get("hidden_dim", 64),
+                hidden_dim=config.get("hidden_dim", 256),
                 num_classes=data["num_classes"],
+                num_hops=num_hops,
                 num_layers=config.get("num_layers", 2),
-                dropout=config.get("dropout", 0.5),
-                K=config.get("K", 10),
-                alpha=config.get("alpha", 0.1),
+                dropout=config.get("dropout", 0.3),
             ).to(self.device)
-            train_result = train_appnp(
-                model, pyg_data,
+
+            train_result = train_sign(
+                model, hop_features,
+                labels=pyg_data.y,
+                train_mask=pyg_data.train_mask,
+                val_mask=None,
                 lr=config.get("lr", 0.01),
                 weight_decay=config.get("weight_decay", 5e-4),
                 epochs=config.get("epochs", 200),
                 patience=config.get("patience", 30),
+                device=self.device,
+            )
+        elif model_type == "SGC" and HAS_NEW_MODELS:
+            # SGC: 预计算 A^K X 特征
+            K = config.get("K", 2)
+            sgc_features = precompute_sgc_features(
+                data["adj_csr"], data["features"].toarray(), K
+            ).to(self.device)
+
+            model = SGC(
+                in_dim=data["num_features"],
+                hidden_dim=config.get("hidden_dim", 256),
+                num_classes=data["num_classes"],
+                K=K,
+            ).to(self.device)
+
+            train_result = train_sgc(
+                model, sgc_features,
+                labels=pyg_data.y,
+                train_mask=pyg_data.train_mask,
+                val_mask=None,
+                lr=config.get("lr", 0.01),
+                weight_decay=config.get("weight_decay", 5e-4),
+                epochs=config.get("epochs", 200),
+                patience=config.get("patience", 30),
+                device=self.device,
             )
         elif model_type == "GCNII" and HAS_NEW_MODELS:
             model = GCNII(
                 in_dim=data["num_features"],
-                hidden_dim=config.get("hidden_dim", 64),
+                hidden_dim=config.get("hidden_dim", 256),
                 num_classes=data["num_classes"],
-                num_layers=config.get("num_layers", 4),
-                dropout=config.get("dropout", 0.5),
+                num_layers=config.get("num_layers", 16),
+                dropout=config.get("dropout", 0.3),
                 alpha=config.get("alpha", 0.1),
                 theta=config.get("theta", 0.5),
             ).to(self.device)
@@ -130,10 +168,10 @@ class ExperimentRunner:
         elif model_type == "MLP" and HAS_NEW_MODELS:
             model = MLPBaseline(
                 in_dim=data["num_features"],
-                hidden_dim=config.get("hidden_dim", 64),
+                hidden_dim=config.get("hidden_dim", 256),
                 num_classes=data["num_classes"],
                 num_layers=config.get("num_layers", 2),
-                dropout=config.get("dropout", 0.5),
+                dropout=config.get("dropout", 0.3),
             ).to(self.device)
             train_result = train_mlp(
                 model, pyg_data,
@@ -146,15 +184,15 @@ class ExperimentRunner:
             # GCN, GAT, GraphSAGE
             model = GNNClassifier(
                 in_dim=data["num_features"],
-                hidden_dim=config.get("hidden_dim", 64),
+                hidden_dim=config.get("hidden_dim", 128),
                 num_classes=data["num_classes"],
-                num_layers=config.get("num_layers", 2),
+                num_layers=config.get("num_layers", 3),
                 model_type=model_type,
-                dropout=config.get("dropout", 0.5),
+                dropout=config.get("dropout", 0.1),
             ).to(self.device)
             train_result = train_gnn(
                 model, pyg_data,
-                lr=config.get("lr", 0.01),
+                lr=config.get("lr", 0.005),
                 weight_decay=config.get("weight_decay", 5e-4),
                 epochs=config.get("epochs", 200),
                 patience=config.get("patience", 30),
