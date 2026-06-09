@@ -132,14 +132,13 @@ class OptunaPlanner:
         if self._current_model_type:
             model_type = self._current_model_type
         else:
-            # 否则按概率采样
+            # V4: 分层模型策略（基于测试结果）
             model_weights = {
-                "GraphSAGE": 0.5,
-                "APPNP": 0.2,
-                "GCNII": 0.15,
-                "GCN": 0.05,
-                "GAT": 0.05,
-                "MLP": 0.05,
+                "APPNP": 0.50,      # 主力模型：稀疏图最佳
+                "GraphSAGE": 0.30,  # 次主模型：稳定可靠
+                "GCN": 0.15,        # 基线模型：快速验证
+                "GCNII": 0.03,      # 研究模型：深层GNN
+                "MLP": 0.02,        # 监控模型：验证图贡献
             }
             model_type = random.choices(
                 list(model_weights.keys()),
