@@ -126,7 +126,7 @@ class BanditPlanner:
     def _default_config(self, model_type: str) -> dict:
         """生成模型的默认配置。"""
         if self.task_type == "classification":
-            base = CLS_DEFAULTS.get(model_type, CLS_DEFAULTS["GCN"]).copy()
+            base = CLS_DEFAULTS.get(model_type, CLS_DEFAULTS["GCNII"]).copy()
             base["model_type"] = model_type
             return base
         else:
