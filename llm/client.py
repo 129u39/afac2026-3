@@ -1,6 +1,16 @@
 """Qwen 客户端：封装 DashScope SDK 接口。"""
 
 import os
+from pathlib import Path
+
+# 自动加载 .env 文件
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).parent.parent / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path)
+except ImportError:
+    pass
 
 try:
     from dashscope import Generation
@@ -28,9 +38,10 @@ class QwenClient:
         self.api_key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
         self.model = model
 
-        # 设置 API Key
+        # 设置 API Key 和 URL
         if self.api_key:
             dashscope.api_key = self.api_key
+        dashscope.base_http_api_url = 'https://dashscope.aliyuncs.com/api/v1'
 
     @property
     def available(self) -> bool:
@@ -72,7 +83,11 @@ class QwenClient:
         )
 
         if response.status_code == 200:
-            return response.output.choices[0].message.content
+            content = response.output.choices[0].message.content
+            # 处理编码问题
+            if isinstance(content, bytes):
+                content = content.decode('utf-8')
+            return content
         else:
             raise RuntimeError(
                 f"DashScope API error: {response.status_code} "
