@@ -1,21 +1,20 @@
-"""Qwen 客户端：封装 DashScope OpenAI 兼容接口。"""
+"""Qwen 客户端：封装 DashScope SDK 接口。"""
 
 import os
 
 try:
-    from openai import OpenAI
-    HAS_OPENAI = True
+    from dashscope import Generation
+    import dashscope
+    HAS_DASHSCOPE = True
 except ImportError:
-    HAS_OPENAI = False
+    HAS_DASHSCOPE = False
 
 
 class QwenClient:
     """Qwen LLM 客户端。
 
-    使用 DashScope 的 OpenAI 兼容接口调用 Qwen 模型。
+    使用 DashScope SDK 调用 Qwen 模型。
     """
-
-    BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     def __init__(self, api_key: str | None = None, model: str = "qwen-plus"):
         """
@@ -23,32 +22,20 @@ class QwenClient:
             api_key: DashScope API Key，None 时从环境变量读取
             model: 模型名称
         """
-        if not HAS_OPENAI:
-            raise ImportError("openai is required. Install with: uv pip install openai")
+        if not HAS_DASHSCOPE:
+            raise ImportError("dashscope is required. Install with: uv pip install dashscope")
 
         self.api_key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
         self.model = model
-        self._client = None
 
-    @property
-    def client(self) -> "OpenAI":
-        """懒加载 OpenAI 客户端。"""
-        if self._client is None:
-            if not self.api_key:
-                raise ValueError(
-                    "DASHSCOPE_API_KEY not set. "
-                    "Set environment variable or pass api_key to QwenClient."
-                )
-            self._client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.BASE_URL,
-            )
-        return self._client
+        # 设置 API Key
+        if self.api_key:
+            dashscope.api_key = self.api_key
 
     @property
     def available(self) -> bool:
         """检查客户端是否可用。"""
-        return bool(self.api_key) and HAS_OPENAI
+        return bool(self.api_key) and HAS_DASHSCOPE
 
     def chat(
         self,
@@ -70,13 +57,24 @@ class QwenClient:
         返回:
             模型响应文本
         """
-        response = self.client.chat.completions.create(
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        response = Generation.call(
+            api_key=self.api_key,
             model=model or self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
+            result_format="message",
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return response.choices[0].message.content
+
+        if response.status_code == 200:
+            return response.output.choices[0].message.content
+        else:
+            raise RuntimeError(
+                f"DashScope API error: {response.status_code} "
+                f"code={response.code} message={response.message}"
+            )
