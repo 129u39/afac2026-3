@@ -16,6 +16,8 @@ from runner.experiment_runner import ExperimentRunner
 from budget_manager import BudgetManager
 from feedback_analyzer import FeedbackAnalyzer
 from analysis.reflection import ReflectionAgent
+from analysis.pattern_extractor import PatternExtractor
+from analysis.adaptive_strategy import AdaptiveStrategy
 from trajectory_logger import TrajectoryLogger
 import config
 
@@ -84,6 +86,9 @@ class Agent:
         self.knowledge_base = KnowledgeBase(f"{output_dir}/knowledge_base.json")
         self.topk_pool = TopKPool(max_size=20, path=f"{output_dir}/top_pool_{task_type}.json") if HAS_TOPK else None
         self.ensemble = EnsembleBuilder(task_type)
+        self.pattern_extractor = PatternExtractor()
+        self.adaptive_strategy = AdaptiveStrategy()
+        self._data_profile = None
 
         # Qwen 客户端
         self.qwen_client = None
@@ -118,7 +123,7 @@ class Agent:
         self._data = None
 
     def load_data(self):
-        """加载数据。"""
+        """加载数据并分析特征。"""
         print(f"[Agent] 加载 {self.task_type} 数据...")
         if self.task_type == "classification":
             self._data = load_classification(self.data_path)
@@ -133,6 +138,16 @@ class Agent:
                   f"物品数: {self._data['num_items']}, "
                   f"训练集: {len(self._data['train_df'])}, "
                   f"测试集: {len(self._data['test_df'])}")
+
+        # V3: 分析数据特征
+        self._data_profile = self.adaptive_strategy.analyze(self._data, self.task_type)
+        strategy = self.adaptive_strategy.get_search_strategy(self._data_profile)
+        print(f"\n[Agent] 数据画像:")
+        print(f"  特征稀疏度: {self._data_profile.feature_sparsity:.1%}")
+        if self.task_type == "classification":
+            print(f"  类别不平衡度: {self._data_profile.class_imbalance:.1f}")
+            print(f"  平均度: {self._data_profile.avg_degree:.1f}")
+        print(f"  推荐策略: {strategy['reasoning']}")
 
         self.runner = ExperimentRunner(self.task_type, self._data, self.device)
 
@@ -284,7 +299,12 @@ class Agent:
                 insights=[reflection_result.observation] if reflection_result else [],
             ))
 
-            # 14. 记录日志
+            # 14. V3: 提取实验模式
+            patterns = self.pattern_extractor.extract(self.memory, self.task_type)
+            if patterns:
+                print(f"  模式: {patterns[0].description[:60]}...")
+
+            # 15. 记录日志
             self.logger.log(
                 round_num=round_num,
                 config=config_dict,
@@ -296,6 +316,7 @@ class Agent:
                     "bandit_arm": selected_arm,
                     "qwen_decision": decision.model_dump(),
                     "reflection": reflection_result.model_dump() if reflection_result else {},
+                    "patterns": [p.description for p in patterns[:3]],
                     "topk_rank": self.topk_pool.entries[0].rank if self.topk_pool and self.topk_pool.entries else None,
                 },
                 runtime={"device": str(self.device), "elapsed_seconds": result.train_time},
