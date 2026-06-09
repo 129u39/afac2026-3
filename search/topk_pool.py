@@ -169,6 +169,9 @@ class TopKPool:
         except Exception:
             self.entries = []
 
+    def __len__(self):
+        return len(self.entries)
+
     def summary(self) -> str:
         """生成摘要。"""
         if not self.entries:
