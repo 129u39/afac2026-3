@@ -1069,4 +1069,250 @@ Round 1: GraphSAGE
 推荐 NDCG: 0.13 → 0.30+
 最终得分: 0.19 → 0.45~0.55
 ```
-| 跨任务知识迁移 | 已有框架 | P3: 完善迁移策略 |
+
+---
+
+# Sparse Product Graph + Feature Selection + Hybrid Classification
+
+## 数据画像
+
+```text
+Nodes          : 13752
+Features       : 767
+Classes        : 10
+Sparsity       : 82.2%
+Imbalance      : 17.7x
+Avg Degree     : 2.0
+```
+
+## 核心结论
+
+```text
+这不是典型图神经网络任务
+
+而是：
+
+高维稀疏特征分类
++
+弱图结构辅助
+```
+
+## 策略调整
+
+```text
+图模型主导
+↓
+特征工程主导
+```
+
+---
+
+## 总体架构
+
+```text
+Raw Features (767维)
+      │
+      ▼
+Feature Selection
+(XGBoost/LightGBM)
+      │
+      ▼
+Selected Features (128~384维)
+      │
+      ├────► MLP
+      │
+      ├────► LightGBM
+      │
+      ├────► GraphSAGE
+      │
+      └────► GCNII
+      │
+      ▼
+Ensemble
+      │
+      ▼
+Prediction
+```
+
+---
+
+## 一、特征筛选
+
+### XGBoost 特征筛选
+
+```python
+XGBClassifier(
+    n_estimators=300,
+    max_depth=6,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8
+)
+```
+
+获取 `feature_importances_`，保留 Top128/256/384/512。
+
+### LightGBM 特征筛选
+
+```python
+LGBMClassifier(
+    objective="multiclass",
+    num_class=10,
+    n_estimators=500
+)
+```
+
+提取 `feature_importances_`，保留 Top256。
+
+优先级高于 XGB（稀疏特征支持更好，速度更快）。
+
+### VarianceThreshold
+
+第一步删除 `variance < 1e-5` 的特征。
+
+预计：767 → 500~650 维。
+
+---
+
+## 二、类别不平衡修复
+
+### Weighted CE
+
+```python
+weights = 1 / log(freq + 1)
+```
+
+用于 `CrossEntropyLoss(weight=weights)`。
+
+### Focal Loss
+
+```python
+gamma: [1.5, 2.0, 2.5]
+```
+
+搜索最优 gamma。
+
+---
+
+## 三、模型配置
+
+### MLP
+
+```python
+767(or 256) → 512 → BN → ReLU → Dropout
+           → 256 → BN → ReLU
+           → 10
+```
+
+搜索：hidden_dim=[256,512], dropout=[0.2,0.3,0.4]
+
+### GraphSAGE
+
+仅保留：layers=[2,3], hidden_dim=[128,256], dropout=[0.2,0.3]
+
+原因：平均度数=2，GraphSAGE 比 GCN 更合理。
+
+### GCNII
+
+搜索：layers=[8,16], hidden_dim=[256], alpha=[0.1,0.2], theta=[0.5,1.0]
+
+### LightGBM/XGBoost 分类器
+
+直接训练，输入筛选后的特征，输出类别概率用于集成。
+
+---
+
+## 四、移除模型
+
+从 Bandit 删除：GAT, APPNP, GCN
+
+原因：实际验证无优势。
+
+---
+
+## 五、分类集成
+
+```python
+prob = 0.35 * LightGBM
+     + 0.30 * MLP
+     + 0.20 * GraphSAGE
+     + 0.15 * GCNII
+```
+
+输出：`argmax(prob)`
+
+---
+
+## 六、Bandit 重构
+
+分类候选：
+
+```python
+arms = ["LightGBM", "MLP", "GraphSAGE", "GCNII"]
+```
+
+初始权重：
+
+```python
+{
+    "LightGBM": 0.35,
+    "MLP": 0.30,
+    "GraphSAGE": 0.20,
+    "GCNII": 0.15
+}
+```
+
+---
+
+## 七、Optuna 搜索空间
+
+新增参数：
+
+```python
+feature_dim = [128, 256, 384, 512]
+loss_type = ["ce", "weighted_ce", "focal"]
+feature_selector = ["none", "xgb", "lgb"]
+```
+
+---
+
+## 八、实验顺序
+
+严格单进程顺序执行：
+
+```text
+Round 1:  VarianceThreshold
+Round 2:  LightGBM Feature Selection
+Round 3:  MLP + Weighted CE
+Round 4:  MLP + Focal Loss
+Round 5:  GraphSAGE + Selected Features
+Round 6:  GCNII + Selected Features
+Round 7:  LightGBM Classifier
+Round 8:  XGBoost Classifier
+Round 9:  MLP + LightGBM Ensemble
+Round 10: Final Ensemble
+```
+
+---
+
+## 九、核心目标
+
+分类不再围绕 GCN/GAT/APPNP 展开，转向：
+
+```text
+特征筛选
++
+类别不平衡修复
++
+Tabular 模型
++
+弱图模型融合
+```
+
+目标：
+
+```text
+Classification Accuracy: 0.23 → 0.35~0.45
+```
+
+这是当前数据画像下最合理、风险最低、收益最大的路线。
