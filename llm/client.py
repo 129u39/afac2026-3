@@ -26,7 +26,7 @@ class QwenClient:
     使用 DashScope SDK 调用 Qwen 模型。
     """
 
-    def __init__(self, api_key: str | None = None, model: str = "qwen-plus"):
+    def __init__(self, api_key: str | None = None, model: str = "qwen-turbo"):
         """
         Args:
             api_key: DashScope API Key，None 时从环境变量读取
