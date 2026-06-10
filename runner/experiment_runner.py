@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import torch
 
 from models.utils import set_seed, get_device, enable_amp, enable_tf32
@@ -14,11 +15,12 @@ from evaluate import evaluate_classification, evaluate_recommendation
 
 # 新模型
 try:
-    from models.appnp import APPNP, train_appnp
     from models.gcnii import GCNII, train_gcnii
     from models.mlp_baseline import MLPBaseline, train_mlp
-    from models.sign import SIGN, precompute_sign_features, train_sign
-    from models.sgc import SGC, precompute_sgc_features, train_sgc
+    from models.lightgbm_model import LightGBMModel
+    from models.xgboost_model import XGBoostModel
+    from features.lgb_selector import LGBSelector
+    from features.xgb_selector import XGBSelector
     HAS_NEW_MODELS = True
 except ImportError:
     HAS_NEW_MODELS = False
@@ -87,70 +89,66 @@ class ExperimentRunner:
 
     def _run_classification(self, config: dict) -> ExperimentResult:
         """执行分类实验。"""
+        import numpy as np
         data = self.data
         pyg_data = classification_to_pyg(data, self.device)
-        model_type = config.get("model_type", "GCNII")
+        model_type = config.get("model_type", "MLP")
 
         # 启用 AMP 和 TF32
         enable_tf32()
 
+        # 特征筛选
+        features = data["features"].toarray()
+        labels = data["labels"]
+        train_idx = data["train_idx"]
+
+        feature_selector_type = config.get("feature_selector", "none")
+        feature_dim = config.get("feature_dim", 256)
+
+        if feature_selector_type == "lgb" and HAS_NEW_MODELS:
+            selector = LGBSelector(n_top_features=feature_dim)
+            features = selector.fit_transform(features[train_idx], labels[train_idx])
+            # 对全量数据转换
+            all_features = selector.transform(data["features"].toarray())
+        elif feature_selector_type == "xgb" and HAS_NEW_MODELS:
+            selector = XGBSelector(n_top_features=feature_dim)
+            features = selector.fit_transform(features[train_idx], labels[train_idx])
+            all_features = selector.transform(data["features"].toarray())
+        else:
+            all_features = features
+
         # 根据模型类型创建模型
-        if model_type == "SIGN" and HAS_NEW_MODELS:
-            # SIGN: 预计算多跳特征
-            num_hops = config.get("num_hops", 3)
-            hop_features = precompute_sign_features(
-                data["adj_csr"], data["features"].toarray(), num_hops
+        if model_type == "LightGBM" and HAS_NEW_MODELS:
+            # LightGBM 直接训练
+            model = LightGBMModel(
+                n_estimators=config.get("n_estimators", 500),
+                max_depth=config.get("max_depth", 6),
+                learning_rate=config.get("learning_rate", 0.05),
             )
-            hop_features = [f.to(self.device) for f in hop_features]
+            train_features = all_features[train_idx]
+            train_labels = labels[train_idx]
 
-            model = SIGN(
-                in_dim=data["num_features"],
-                hidden_dim=config.get("hidden_dim", 256),
-                num_classes=data["num_classes"],
-                num_hops=num_hops,
-                num_layers=config.get("num_layers", 2),
-                dropout=config.get("dropout", 0.3),
-            ).to(self.device)
-
-            train_result = train_sign(
-                model, hop_features,
-                labels=pyg_data.y,
-                train_mask=pyg_data.train_mask,
-                val_mask=None,
-                lr=config.get("lr", 0.01),
-                weight_decay=config.get("weight_decay", 5e-4),
-                epochs=config.get("epochs", 200),
-                patience=config.get("patience", 30),
-                device=self.device,
+            from sklearn.model_selection import train_test_split
+            X_train, X_val, y_train, y_val = train_test_split(
+                train_features, train_labels, test_size=0.2, random_state=42, stratify=train_labels
             )
-        elif model_type == "SGC" and HAS_NEW_MODELS:
-            # SGC: 预计算 A^K X 特征
-            K = config.get("K", 2)
-            sgc_features = precompute_sgc_features(
-                data["adj_csr"], data["features"].toarray(), K
-            ).to(self.device)
 
-            model = SGC(
-                in_dim=data["num_features"],
-                hidden_dim=config.get("hidden_dim", 256),
-                num_classes=data["num_classes"],
-                K=K,
-            ).to(self.device)
+            model.fit(X_train, y_train)
+            val_pred = model.predict(X_val)
+            from sklearn.metrics import accuracy_score
+            val_acc = accuracy_score(y_val, val_pred)
 
-            train_result = train_sgc(
-                model, sgc_features,
-                labels=pyg_data.y,
-                train_mask=pyg_data.train_mask,
-                val_mask=None,
-                lr=config.get("lr", 0.01),
-                weight_decay=config.get("weight_decay", 5e-4),
-                epochs=config.get("epochs", 200),
-                patience=config.get("patience", 30),
-                device=self.device,
+            return ExperimentResult(
+                metric=val_acc,
+                train_time=0.0,
+                model_name=model_type,
+                config=config,
+                metrics={"val_accuracy": val_acc},
+                model=model,
             )
         elif model_type == "GCNII" and HAS_NEW_MODELS:
             model = GCNII(
-                in_dim=data["num_features"],
+                in_dim=all_features.shape[1],
                 hidden_dim=config.get("hidden_dim", 256),
                 num_classes=data["num_classes"],
                 num_layers=config.get("num_layers", 16),
@@ -167,8 +165,8 @@ class ExperimentRunner:
             )
         elif model_type == "MLP" and HAS_NEW_MODELS:
             model = MLPBaseline(
-                in_dim=data["num_features"],
-                hidden_dim=config.get("hidden_dim", 256),
+                in_dim=all_features.shape[1],
+                hidden_dim=config.get("hidden_dim", 512),
                 num_classes=data["num_classes"],
                 num_layers=config.get("num_layers", 2),
                 dropout=config.get("dropout", 0.3),

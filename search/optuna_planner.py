@@ -132,13 +132,12 @@ class OptunaPlanner:
         if self._current_model_type:
             model_type = self._current_model_type
         else:
-            # 分层模型策略
+            # 模型策略
             model_weights = {
-                "GCNII": 0.35,      # 主力模型（真实测试 0.36）
-                "SIGN": 0.35,       # 主力模型（稀疏图专用）
-                "SGC": 0.20,        # 快速模型
-                "GraphSAGE": 0.05,  # 基线模型
-                "MLP": 0.05,        # 监控模型
+                "LightGBM": 0.35,
+                "MLP": 0.30,
+                "GraphSAGE": 0.20,
+                "GCNII": 0.15,
             }
             model_type = random.choices(
                 list(model_weights.keys()),
@@ -146,21 +145,23 @@ class OptunaPlanner:
                 k=1
             )[0]
 
+        # 特征筛选参数
+        feature_dim = trial.suggest_categorical("feature_dim", [128, 256, 384, 512])
+        feature_selector = trial.suggest_categorical("feature_selector", ["none", "lgb", "xgb"])
+        loss_type = trial.suggest_categorical("loss_type", ["ce", "weighted_ce", "focal"])
+
         # 统一搜索空间
-        hidden_dim = trial.suggest_categorical("hidden_dim", [128, 256, 512])
-        dropout = trial.suggest_float("dropout", 0.1, 0.5, step=0.1)
+        hidden_dim = trial.suggest_categorical("hidden_dim", [256, 512])
+        dropout = trial.suggest_float("dropout", 0.2, 0.5, step=0.1)
         lr = trial.suggest_float("lr", 5e-4, 1e-2, log=True)
         weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True)
-
-        # 模型特有参数
         num_layers = trial.suggest_int("num_layers", 2, 4)
-        K = trial.suggest_int("K", 2, 5)
-        num_hops = trial.suggest_int("num_hops", 2, 4)
-        alpha = trial.suggest_float("alpha", 0.05, 0.2, step=0.05)
-        theta = trial.suggest_float("theta", 0.3, 1.0, step=0.1)
 
         config = {
             "model_type": model_type,
+            "feature_dim": feature_dim,
+            "feature_selector": feature_selector,
+            "loss_type": loss_type,
             "hidden_dim": hidden_dim,
             "dropout": dropout,
             "lr": lr,
@@ -170,17 +171,15 @@ class OptunaPlanner:
         }
 
         # 添加模型特有参数
-        if model_type == "GCNII":
-            config["num_layers"] = trial.suggest_categorical("num_layers", [8, 16, 32])
-            config["alpha"] = alpha
-            config["theta"] = theta
-        elif model_type == "SIGN":
-            config["num_hops"] = num_hops
-            config["num_layers"] = num_layers
-        elif model_type == "SGC":
-            config["K"] = K
+        if model_type == "LightGBM":
+            config["n_estimators"] = trial.suggest_categorical("n_estimators", [300, 500])
+            config["max_depth"] = trial.suggest_categorical("max_depth", [4, 6, 8])
+        elif model_type == "GCNII":
+            config["num_layers"] = trial.suggest_categorical("num_layers", [8, 16])
+            config["alpha"] = trial.suggest_float("alpha", 0.1, 0.2, step=0.05)
+            config["theta"] = trial.suggest_float("theta", 0.5, 1.0, step=0.1)
         elif model_type == "GraphSAGE":
-            config["num_layers"] = num_layers
+            config["num_layers"] = trial.suggest_categorical("num_layers", [2, 3])
         elif model_type == "MLP":
             config["num_layers"] = num_layers
 

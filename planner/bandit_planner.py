@@ -10,16 +10,14 @@ from feedback_analyzer import FeedbackAnalyzer
 
 # 分类任务默认配置模板
 CLS_DEFAULTS = {
-    # 主力模型：GCNII（真实测试 0.36，最佳）
+    # 主力模型：LightGBM（特征工程）
+    "LightGBM": {"n_estimators": 500, "max_depth": 6, "learning_rate": 0.05},
+    # 主力模型：MLP
+    "MLP": {"hidden_dim": 512, "num_layers": 2, "dropout": 0.3, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
+    # 图模型：GraphSAGE
+    "GraphSAGE": {"hidden_dim": 128, "num_layers": 3, "dropout": 0.2, "lr": 0.005, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
+    # 图模型：GCNII
     "GCNII": {"hidden_dim": 256, "num_layers": 16, "dropout": 0.3, "lr": 0.01, "weight_decay": 5e-4, "alpha": 0.1, "theta": 0.5, "epochs": 200, "patience": 30},
-    # 主力模型：SIGN（稀疏图专用）
-    "SIGN": {"hidden_dim": 256, "num_hops": 3, "num_layers": 2, "dropout": 0.3, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
-    # 快速模型：SGC
-    "SGC": {"hidden_dim": 256, "K": 2, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
-    # 基线模型：GraphSAGE（真实测试 0.28）
-    "GraphSAGE": {"hidden_dim": 128, "num_layers": 3, "dropout": 0.1, "lr": 0.005, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
-    # 基线模型：MLP（真实测试 0.31）
-    "MLP": {"hidden_dim": 256, "num_layers": 2, "dropout": 0.3, "lr": 0.01, "weight_decay": 5e-4, "epochs": 200, "patience": 30},
 }
 
 # 推荐任务默认配置模板
@@ -54,7 +52,7 @@ class BanditPlanner:
 
         # 根据任务类型初始化 Bandit 臂
         if task_type == "classification":
-            arms = ["GCNII", "SIGN", "SGC", "GraphSAGE", "MLP"]
+            arms = ["LightGBM", "MLP", "GraphSAGE", "GCNII"]
         else:
             arms = ["LightGCN", "SASRec", "BPR_MF", "ItemCF"]
 

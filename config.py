@@ -23,14 +23,17 @@ TOTAL_BUDGET_SECONDS = 7200  # 2小时
 SAFETY_MARGIN_SECONDS = 300  # 预留5分钟生成提交
 
 # ── 分类超参搜索空间 ─────────────────────────────────
-# 主力: GCNII (0.35) > SIGN (0.35) > SGC (0.20) > GraphSAGE (0.05) > MLP (0.05)
+# 主力: LightGBM (0.35) > MLP (0.30) > GraphSAGE (0.20) > GCNII (0.15)
 CLS_SEARCH_SPACE = {
-    "model_type": ["GCNII", "SIGN", "SGC", "GraphSAGE", "MLP"],
-    "hidden_dim": [128, 256, 512],
-    "num_layers": [2, 4, 8, 16, 32],
-    "dropout": [0.1, 0.2, 0.3, 0.5],
+    "model_type": ["LightGBM", "MLP", "GraphSAGE", "GCNII"],
+    "hidden_dim": [256, 512],
+    "num_layers": [2, 3, 8, 16],
+    "dropout": [0.2, 0.3, 0.4, 0.5],
     "lr": [5e-4, 1e-3, 2e-3, 5e-3, 1e-2],
     "weight_decay": [0.0, 1e-5, 5e-5, 1e-4, 5e-4],
+    "feature_dim": [128, 256, 384, 512],
+    "feature_selector": ["none", "lgb", "xgb"],
+    "loss_type": ["ce", "weighted_ce", "focal"],
     "epochs": [200],
     "patience": [30],
 }
