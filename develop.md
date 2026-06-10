@@ -1072,38 +1072,32 @@ Round 1: GraphSAGE
 
 ---
 
-# Sparse Product Graph + Feature Selection + Hybrid Classification
+# 技术文档 V5 — 特征工程 + 混合分类
+
+## 目标
+
+从图模型主导转向特征工程主导：
+
+```text
+图模型主导 (V1-V4)
+    ↓
+特征工程主导 (V5) ← 当前
+```
+
+核心发现：当前数据不是典型图神经网络任务，而是**高维稀疏特征分类 + 弱图结构辅助**。
+
+---
 
 ## 数据画像
 
-```text
-Nodes          : 13752
-Features       : 767
-Classes        : 10
-Sparsity       : 82.2%
-Imbalance      : 17.7x
-Avg Degree     : 2.0
-```
-
-## 核心结论
-
-```text
-这不是典型图神经网络任务
-
-而是：
-
-高维稀疏特征分类
-+
-弱图结构辅助
-```
-
-## 策略调整
-
-```text
-图模型主导
-↓
-特征工程主导
-```
+| 指标 | 值 | 含义 |
+|------|-----|------|
+| 节点数 | 13,752 | 产品数 |
+| 特征维度 | 767 | 高维稀疏 |
+| 类别数 | 10 | 多分类 |
+| 特征稀疏度 | 82.2% | 大量零特征 |
+| 类别不平衡 | 17.7x | 严重不平衡 |
+| 平均度 | 2.0 | 图结构极弱 |
 
 ---
 
@@ -1113,22 +1107,24 @@ Avg Degree     : 2.0
 Raw Features (767维)
       │
       ▼
-Feature Selection
-(XGBoost/LightGBM)
+VarianceThreshold (删除低方差特征)
+      │
+      ▼
+Feature Selection (LightGBM/XGBoost)
       │
       ▼
 Selected Features (128~384维)
       │
-      ├────► MLP
+      ├────► MLP + Weighted CE
       │
-      ├────► LightGBM
+      ├────► LightGBM Classifier
       │
       ├────► GraphSAGE
       │
       └────► GCNII
       │
       ▼
-Ensemble
+Ensemble (加权投票)
       │
       ▼
 Prediction
@@ -1136,23 +1132,17 @@ Prediction
 
 ---
 
-## 一、特征筛选
+## V5 模块 1 — 特征筛选
 
-### XGBoost 特征筛选
+### features/variance_selector.py
 
 ```python
-XGBClassifier(
-    n_estimators=300,
-    max_depth=6,
-    learning_rate=0.05,
-    subsample=0.8,
-    colsample_bytree=0.8
-)
+VarianceThreshold(threshold=1e-5)
 ```
 
-获取 `feature_importances_`，保留 Top128/256/384/512。
+预计：767 → 500~650 维。
 
-### LightGBM 特征筛选
+### features/lgb_selector.py
 
 ```python
 LGBMClassifier(
@@ -1164,37 +1154,40 @@ LGBMClassifier(
 
 提取 `feature_importances_`，保留 Top256。
 
-优先级高于 XGB（稀疏特征支持更好，速度更快）。
+### features/xgb_selector.py
 
-### VarianceThreshold
+```python
+XGBClassifier(
+    n_estimators=300,
+    max_depth=6,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8
+)
+```
 
-第一步删除 `variance < 1e-5` 的特征。
-
-预计：767 → 500~650 维。
+保留 Top128/256/384/512。
 
 ---
 
-## 二、类别不平衡修复
+## V5 模块 2 — 类别不平衡修复
 
-### Weighted CE
+### losses/weighted_ce.py
 
 ```python
 weights = 1 / log(freq + 1)
+loss = CrossEntropyLoss(weight=weights)
 ```
 
-用于 `CrossEntropyLoss(weight=weights)`。
-
-### Focal Loss
+### losses/focal_loss.py
 
 ```python
 gamma: [1.5, 2.0, 2.5]
 ```
 
-搜索最优 gamma。
-
 ---
 
-## 三、模型配置
+## V5 模块 3 — 模型配置
 
 ### MLP
 
@@ -1210,27 +1203,17 @@ gamma: [1.5, 2.0, 2.5]
 
 仅保留：layers=[2,3], hidden_dim=[128,256], dropout=[0.2,0.3]
 
-原因：平均度数=2，GraphSAGE 比 GCN 更合理。
-
 ### GCNII
 
 搜索：layers=[8,16], hidden_dim=[256], alpha=[0.1,0.2], theta=[0.5,1.0]
 
 ### LightGBM/XGBoost 分类器
 
-直接训练，输入筛选后的特征，输出类别概率用于集成。
+直接训练，输出类别概率用于集成。
 
 ---
 
-## 四、移除模型
-
-从 Bandit 删除：GAT, APPNP, GCN
-
-原因：实际验证无优势。
-
----
-
-## 五、分类集成
+## V5 模块 4 — 分类集成
 
 ```python
 prob = 0.35 * LightGBM
@@ -1243,9 +1226,7 @@ prob = 0.35 * LightGBM
 
 ---
 
-## 六、Bandit 重构
-
-分类候选：
+## V5 Bandit 策略
 
 ```python
 arms = ["LightGBM", "MLP", "GraphSAGE", "GCNII"]
@@ -1264,7 +1245,7 @@ arms = ["LightGBM", "MLP", "GraphSAGE", "GCNII"]
 
 ---
 
-## 七、Optuna 搜索空间
+## V5 Optuna 搜索空间
 
 新增参数：
 
@@ -1276,7 +1257,15 @@ feature_selector = ["none", "xgb", "lgb"]
 
 ---
 
-## 八、实验顺序
+## V5 移除模型
+
+从 Bandit 删除：GAT, APPNP, GCN
+
+原因：实际验证无优势。
+
+---
+
+## V5 实验顺序
 
 严格单进程顺序执行：
 
@@ -1295,24 +1284,34 @@ Round 10: Final Ensemble
 
 ---
 
-## 九、核心目标
-
-分类不再围绕 GCN/GAT/APPNP 展开，转向：
+## V5 目标指标
 
 ```text
-特征筛选
-+
-类别不平衡修复
-+
-Tabular 模型
-+
-弱图模型融合
+分类 Accuracy: 0.23 → 0.35~0.45
+推荐 NDCG: 0.13 → 0.30+
+最终得分: 0.19 → 0.45~0.55
 ```
 
-目标：
+---
 
-```text
-Classification Accuracy: 0.23 → 0.35~0.45
-```
+## V5 新增文件
 
-这是当前数据画像下最合理、风险最低、收益最大的路线。
+| 文件 | 功能 |
+|------|------|
+| `features/variance_selector.py` | 低方差特征过滤 |
+| `features/lgb_selector.py` | LightGBM 特征筛选 |
+| `features/xgb_selector.py` | XGBoost 特征筛选 |
+| `features/feature_cache.py` | 特征缓存 |
+| `losses/focal_loss.py` | Focal Loss |
+| `losses/weighted_ce.py` | 加权交叉熵 |
+| `models/lightgbm_model.py` | LightGBM 分类器 |
+| `models/xgboost_model.py` | XGBoost 分类器 |
+
+## V5 修改文件
+
+| 文件 | 变更 |
+|------|------|
+| `planner/bandit_planner.py` | 新增 LightGBM 臂，移除 GAT/APPNP/GCN |
+| `search/optuna_planner.py` | 新增 feature_dim/loss_type/feature_selector |
+| `runner/experiment_runner.py` | 支持特征筛选和新模型 |
+| `config.py` | 更新搜索空间 |
