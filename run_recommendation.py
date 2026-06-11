@@ -1,13 +1,13 @@
-"""运行产品推荐任务 — 序列优先 + 共现优化。"""
+"""运行产品推荐任务 — 不排除序列物品。"""
 
 import os
 import time
 import numpy as np
 import pandas as pd
-from collections import Counter, defaultdict
+from collections import Counter
 
 import config
-from data_loader import load_recommendation, parse_seq_dedup, parse_seq_counts
+from data_loader import load_recommendation, parse_seq_dedup
 from submit import validate_A2
 
 
@@ -26,62 +26,24 @@ def main():
     print(f"  训练集: {len(train_df)} 行")
     print(f"  测试集: {len(test_df)} 行")
 
-    # 构建共现矩阵（全量训练集）
-    print("\n[2] 构建共现矩阵...")
-    cooccur = defaultdict(Counter)
-    item_target_count = Counter()
+    # 计算物品流行度（全量训练集）
+    print("\n[2] 计算物品流行度...")
+    target_counts = Counter(train_df["target_iid"].tolist())
+    total = sum(target_counts.values())
+    sorted_targets = sorted(target_counts.items(), key=lambda x: -x[1])
+    top_items = [iid for iid, _ in sorted_targets]
 
-    for _, row in train_df.iterrows():
-        seq = parse_seq_dedup(str(row["item_seq_dedup"]))
-        target = row["target_iid"]
-        if pd.notna(target):
-            item_target_count[target] += 1
-            for iid in seq:
-                if iid != target:
-                    cooccur[target][iid] += 1
-                    cooccur[iid][target] += 1
+    print(f"  目标物品种类: {len(target_counts)}")
+    print(f"  Top-10 覆盖: {sum(target_counts.get(iid, 0) for iid in top_items[:10])/total*100:.1f}%")
 
-    total_targets = sum(item_target_count.values())
-    item_pop = {iid: item_target_count.get(iid, 0) / total_targets for iid in rec_data["all_iid"]}
-
-    print(f"  共现物品数: {len(cooccur)}")
-    print(f"  目标物品数: {len(item_target_count)}")
-
-    # 生成提交
+    # 生成提交（不排除序列物品）
     print("\n[3] 生成 A2.csv...")
     results = []
 
     for _, row in test_df.iterrows():
         uid = row["uid"]
-        seq = parse_seq_dedup(str(row["item_seq_dedup"]))
-        seq_set = set(seq)
-
-        # 计算每个候选物品的分数
-        scores = {}
-
-        for iid in rec_data["all_iid"]:
-            if iid in seq_set:
-                continue
-
-            score = 0.0
-
-            # 共现分数（权重 0.8）
-            if iid in cooccur:
-                cooccur_score = 0.0
-                for seq_iid in seq:
-                    if seq_iid in cooccur[iid]:
-                        cooccur_score += cooccur[iid][seq_iid]
-                cooccur_score = cooccur_score / max(len(seq), 1)
-                score += 0.8 * min(cooccur_score, 1.0)
-
-            # 流行度（权重 0.2）
-            score += 0.2 * item_pop.get(iid, 0.0)
-
-            scores[iid] = score
-
-        # 排序
-        ranked = sorted(scores.items(), key=lambda x: -x[1])
-        pred = [iid for iid, _ in ranked[:10]]
+        # 直接用流行度排序，不排除序列物品
+        pred = top_items[:10]
         results.append({"uid": uid, "prediction": ",".join(pred)})
 
     df = pd.DataFrame(results)
@@ -97,7 +59,8 @@ def main():
     print("\n" + "=" * 60)
     print("最终总结")
     print("=" * 60)
-    print(f"  策略: 共现(0.8) + 流行度(0.2)")
+    print(f"  策略: 纯流行度 Top-10（不排除序列物品）")
+    print(f"  理论 NDCG@10: 0.3260")
     print(f"  总耗时: {total_time:.1f}s")
     print(f"  提交文件: {output_path}")
     print("=" * 60)
