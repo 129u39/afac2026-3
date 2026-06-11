@@ -77,7 +77,6 @@ def main():
     print("最终总结")
     print("=" * 60)
     print(f"  策略: 序列中目标物品 + 目标物品流行度")
-    print(f"  理论 NDCG@10: 0.4937")
     print(f"  总耗时: {total_time:.1f}s")
     print(f"  提交文件: {output_path}")
     print("=" * 60)
