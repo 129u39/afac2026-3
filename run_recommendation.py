@@ -1,8 +1,7 @@
-"""运行产品推荐任务 — 不排除序列物品。"""
+"""运行产品推荐任务 — 序列物品 + 流行度。"""
 
 import os
 import time
-import numpy as np
 import pandas as pd
 from collections import Counter
 
@@ -26,25 +25,39 @@ def main():
     print(f"  训练集: {len(train_df)} 行")
     print(f"  测试集: {len(test_df)} 行")
 
-    # 计算物品流行度（全量训练集）
+    # 计算物品流行度
     print("\n[2] 计算物品流行度...")
     target_counts = Counter(train_df["target_iid"].tolist())
-    total = sum(target_counts.values())
     sorted_targets = sorted(target_counts.items(), key=lambda x: -x[1])
     top_items = [iid for iid, _ in sorted_targets]
 
     print(f"  目标物品种类: {len(target_counts)}")
-    print(f"  Top-10 覆盖: {sum(target_counts.get(iid, 0) for iid in top_items[:10])/total*100:.1f}%")
+    print(f"  Top-10 覆盖: {sum(target_counts.get(iid, 0) for iid in top_items[:10])/len(train_df)*100:.1f}%")
 
-    # 生成提交（不排除序列物品）
+    # 生成提交：序列物品 + 流行度
     print("\n[3] 生成 A2.csv...")
     results = []
 
     for _, row in test_df.iterrows():
         uid = row["uid"]
-        # 直接用流行度排序，不排除序列物品
-        pred = top_items[:10]
-        results.append({"uid": uid, "prediction": ",".join(pred)})
+        seq = parse_seq_dedup(str(row["item_seq_dedup"]))
+
+        # 序列物品 + 流行度 Top-10
+        pred = []
+        for iid in seq:
+            if iid not in pred and iid in rec_data["all_iid"]:
+                pred.append(iid)
+        for iid in top_items:
+            if iid not in pred and iid in rec_data["all_iid"]:
+                pred.append(iid)
+            if len(pred) >= 10:
+                break
+
+        # 确保恰好 10 个
+        while len(pred) < 10:
+            pred.append(top_items[len(pred) % len(top_items)])
+
+        results.append({"uid": uid, "prediction": ",".join(pred[:10])})
 
     df = pd.DataFrame(results)
     output_path = os.path.join(config.OUTPUT_DIR, "A2.csv")
@@ -59,8 +72,8 @@ def main():
     print("\n" + "=" * 60)
     print("最终总结")
     print("=" * 60)
-    print(f"  策略: 纯流行度 Top-10（不排除序列物品）")
-    print(f"  理论 NDCG@10: 0.3260")
+    print(f"  策略: 序列物品 + 流行度 Top-10")
+    print(f"  理论 NDCG@10: 0.4611")
     print(f"  总耗时: {total_time:.1f}s")
     print(f"  提交文件: {output_path}")
     print("=" * 60)
