@@ -56,7 +56,11 @@ class HybridClassifier:
         deg_inv[deg > 0] = 1.0 / deg[deg > 0]
         D_inv = diags(deg_inv)
         agg = D_inv @ adj @ features
-        agg_dense = agg.toarray()
+        # 处理稀疏或密集输出
+        if hasattr(agg, 'toarray'):
+            agg_dense = agg.toarray()
+        else:
+            agg_dense = np.array(agg)
         agg_dense[deg == 0] = features[deg == 0]
 
         # 拼接特征
