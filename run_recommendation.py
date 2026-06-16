@@ -1,130 +1,196 @@
-"""运行产品推荐任务 — 交叉验证 + 最优策略。"""
+"""Recommendation task runner with validation-based model selection."""
+
+from __future__ import annotations
 
 import os
 import time
-import pandas as pd
+from dataclasses import dataclass
+from math import log2
+from typing import Callable
+
 import numpy as np
-from collections import Counter
-from sklearn.model_selection import KFold
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
 import config
-from data_loader import load_recommendation, parse_seq_dedup
+from data_loader import load_recommendation, parse_seq_counts, parse_seq_dedup
 from submit import validate_A2
+from models.hybrid_recommender import HybridRecommender, SequenceFirstRecommender
+from models.recommender import RecommenderSystem
 
 
-def evaluate_strategy(train_df):
-    """5-fold 交叉验证评估策略。"""
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    ndcg_scores = []
+@dataclass
+class RecommendationModel:
+    name: str
+    factory: Callable[[], object]
+    model: object | None = None
+    score: float = 0.0
 
-    for train_idx, val_idx in kf.split(train_df):
-        train_sub = train_df.iloc[train_idx]
-        val_sub = train_df.iloc[val_idx]
+    def fit(self, train_df: pd.DataFrame, rec_data: dict):
+        self.model = self.factory()
+        if isinstance(self.model, RecommenderSystem):
+            self.model.fit({**rec_data, "train_df": train_df})
+        else:
+            self.model.fit({**rec_data, "train_df": train_df})
+        return self
 
-        # 计算目标物品（仅训练子集）
-        sub_target_counts = Counter(train_sub['target_iid'].tolist())
-        sub_sorted = sorted(sub_target_counts.items(), key=lambda x: -x[1])
-        sub_top = [iid for iid, _ in sub_sorted]
-        sub_target_items = set(train_sub['target_iid'].unique())
+    def predict(self, uid: str, seq: list[str], seq_counts: dict[str, int], top_k: int = 10) -> list[str]:
+        if hasattr(self.model, "predict"):
+            try:
+                return self.model.predict(uid, seq, seq_counts, top_k=top_k)
+            except TypeError:
+                return self.model.predict(uid, seq, top_k=top_k)
+        return []
 
-        ndcg_list = []
-        for _, row in val_sub.iterrows():
-            seq = parse_seq_dedup(str(row['item_seq_dedup']))
-            target = row['target_iid']
-            seq_targets = [iid for iid in seq if iid in sub_target_items]
 
-            pred = []
-            for iid in seq_targets:
-                if iid not in pred:
-                    pred.append(iid)
-            for iid in sub_top:
-                if iid not in pred:
-                    pred.append(iid)
-                if len(pred) >= 10:
-                    break
+class RankEnsemble:
+    def __init__(self, models: list[RecommendationModel]):
+        self.models = models
 
-            if target in pred:
-                rank = pred.index(target) + 1
-                ndcg_list.append(1.0 / np.log2(rank + 1))
-            else:
-                ndcg_list.append(0.0)
+    def predict(self, uid: str, seq: list[str], seq_counts: dict[str, int], top_k: int = 10) -> list[str]:
+        scores: dict[str, float] = {}
 
-        ndcg_scores.append(np.mean(ndcg_list))
+        for model in self.models:
+            ranked = model.predict(uid, seq, seq_counts, top_k=max(50, top_k * 5))
+            weight = max(model.score, 1e-6)
+            for rank, item in enumerate(ranked):
+                scores[item] = scores.get(item, 0.0) + weight / log2(rank + 2)
 
-    return np.mean(ndcg_scores), np.std(ndcg_scores)
+        ordered = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
+        result = [iid for iid, _ in ordered]
+        return result[:top_k]
+
+
+def _ndcg_at_k(pred_list: list[str], target: str) -> float:
+    if target in pred_list:
+        rank = pred_list.index(target) + 1
+        return 1.0 / log2(rank + 1)
+    return 0.0
+
+
+def _evaluate_model(model, val_df: pd.DataFrame, k: int = 10, max_val_samples: int = 1500) -> float:
+    if len(val_df) > max_val_samples:
+        val_df = val_df.sample(n=max_val_samples, random_state=42)
+
+    scores = []
+    for _, row in val_df.iterrows():
+        uid = row["uid"]
+        target = str(row["target_iid"])
+        seq = parse_seq_dedup(str(row["item_seq_dedup"]))
+        seq_counts = parse_seq_counts(str(row["item_seq_counts"]))
+        try:
+            pred = model.predict(uid, seq, seq_counts, top_k=k)
+        except TypeError:
+            pred = model.predict(uid, seq, top_k=k)
+        scores.append(_ndcg_at_k(pred, target))
+
+    return float(np.mean(scores)) if scores else 0.0
+
+
+def _build_models() -> list[RecommendationModel]:
+    return [
+        RecommendationModel("SequenceFirst", lambda: SequenceFirstRecommender()),
+        RecommendationModel("Hybrid", lambda: HybridRecommender()),
+        RecommendationModel("Popularity", lambda: RecommenderSystem(model_type="Popularity")),
+        RecommendationModel("ItemCF", lambda: RecommenderSystem(model_type="ItemCF")),
+        RecommendationModel(
+            "LightGCN",
+            lambda: RecommenderSystem(
+                model_type="LightGCN",
+                embedding_dim=64,
+                num_layers=3,
+                lr=0.001,
+                epochs=20,
+                batch_size=512,
+            ),
+        ),
+        RecommendationModel(
+            "BPR_MF",
+            lambda: RecommenderSystem(
+                model_type="BPR_MF",
+                embedding_dim=64,
+                lr=0.01,
+                epochs=25,
+                batch_size=512,
+            ),
+        ),
+    ]
 
 
 def main():
     print("=" * 60)
-    print("AFAC2026 - 产品推荐任务 (A2)")
+    print("AFAC2026 - Recommendation task (A2)")
     print("=" * 60)
-
     total_start = time.time()
 
-    # 加载数据
-    print("\n[1] 加载数据...")
+    print("\n[1] Loading data...")
     rec_data = load_recommendation(config.REC_DATA_DIR)
     train_df = rec_data["train_df"]
     test_df = rec_data["test_df"]
-    print(f"  训练集: {len(train_df)} 行")
-    print(f"  测试集: {len(test_df)} 行")
+    print(f"  train rows: {len(train_df)}")
+    print(f"  test rows: {len(test_df)}")
+    print(f"  items: {len(rec_data['all_iid'])}")
 
-    # 计算目标物品流行度
-    print("\n[2] 计算目标物品流行度...")
-    target_counts = Counter(train_df["target_iid"].tolist())
-    sorted_targets = sorted(target_counts.items(), key=lambda x: -x[1])
-    top_target_items = [iid for iid, _ in sorted_targets]
-    target_items = set(train_df["target_iid"].unique())
+    try:
+        train_sub, val_sub = train_test_split(
+            train_df,
+            test_size=0.2,
+            random_state=42,
+            stratify=train_df["target_iid"],
+        )
+    except ValueError:
+        train_sub, val_sub = train_test_split(
+            train_df,
+            test_size=0.2,
+            random_state=42,
+        )
 
-    print(f"  目标物品种类: {len(target_items)}")
-    print(f"  Top-10 覆盖: {sum(target_counts.get(iid, 0) for iid in top_target_items[:10])/len(train_df)*100:.1f}%")
+    print("\n[2] Fitting candidate models...")
+    candidates = _build_models()
+    val_results = []
+    for candidate in candidates:
+        candidate.fit(train_sub, rec_data)
+        candidate.score = _evaluate_model(candidate, val_sub, k=10)
+        val_results.append({"name": candidate.name, "ndcg@10": candidate.score})
+        print(f"  {candidate.name}: NDCG@10 = {candidate.score:.4f}")
 
-    # 交叉验证评估
-    print("\n[3] 交叉验证评估...")
-    ndcg_mean, ndcg_std = evaluate_strategy(train_df)
-    print(f"  NDCG@10: {ndcg_mean:.4f} ± {ndcg_std:.4f}")
+    val_results = sorted(val_results, key=lambda item: item["ndcg@10"], reverse=True)
+    top_models = sorted(candidates, key=lambda item: item.score, reverse=True)[:3]
+    print("\n[3] Best candidates")
+    for item in val_results[:3]:
+        print(f"  {item['name']}: {item['ndcg@10']:.4f}")
 
-    # 生成提交
-    print("\n[4] 生成 A2.csv...")
+    print("\n[4] Refit top models on full training data...")
+    for model in top_models:
+        model.fit(train_df, rec_data)
+
+    ensemble = RankEnsemble(top_models)
+
+    print("\n[5] Generating submission...")
     results = []
-
     for _, row in test_df.iterrows():
         uid = row["uid"]
         seq = parse_seq_dedup(str(row["item_seq_dedup"]))
-        seq_targets = [iid for iid in seq if iid in target_items]
+        seq_counts = parse_seq_counts(str(row["item_seq_counts"]))
+        pred = ensemble.predict(uid, seq, seq_counts, top_k=10)
+        results.append({"uid": uid, "prediction": ",".join(pred)})
 
-        pred = []
-        for iid in seq_targets:
-            if iid not in pred:
-                pred.append(iid)
-        for iid in top_target_items:
-            if iid not in pred:
-                pred.append(iid)
-            if len(pred) >= 10:
-                break
-
-        while len(pred) < 10:
-            pred.append(top_target_items[len(pred) % len(top_target_items)])
-
-        results.append({"uid": uid, "prediction": ",".join(pred[:10])})
-
-    df = pd.DataFrame(results)
     output_path = os.path.join(config.OUTPUT_DIR, "A2.csv")
+    df = pd.DataFrame(results)
     df.to_csv(output_path, index=False)
-    print(f"  已保存: {output_path} ({len(df)} 行)")
+    print(f"  saved: {output_path}")
 
-    # 校验
     validate_A2(output_path, len(test_df), rec_data["all_iid"])
 
-    # 总结
     total_time = time.time() - total_start
     print("\n" + "=" * 60)
-    print("最终总结")
+    print("Summary")
     print("=" * 60)
-    print(f"  策略: 序列中目标物品 + 目标物品流行度")
-    print(f"  NDCG@10: {ndcg_mean:.4f} ± {ndcg_std:.4f}")
-    print(f"  总耗时: {total_time:.1f}s")
-    print(f"  提交文件: {output_path}")
+    print("  top models:")
+    for model in top_models:
+        print(f"    - {model.name}: {model.score:.4f}")
+    print(f"  total time: {total_time:.1f}s")
+    print(f"  submission: {output_path}")
     print("=" * 60)
 
 

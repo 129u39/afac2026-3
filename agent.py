@@ -2,13 +2,15 @@
 
 import time
 import torch
+import numpy as np
 
 from models.utils import set_seed, get_device
 from models.gnn_classifier import predict_gnn
 from models.ensemble import EnsembleBuilder
-from data_loader import load_classification, load_recommendation, parse_seq_dedup
+from data_loader import load_classification, load_recommendation, parse_seq_dedup, parse_seq_counts
 from memory import ExperimentMemory, ExperimentRecord
 from memory.retriever import Retriever
+from memory.config_cache import ConfigCache, config_hash
 from memory.knowledge_base import KnowledgeBase, KnowledgeEntry
 from planner.bandit_planner import BanditPlanner
 from planner.qwen_planner import QwenPlanner
@@ -16,6 +18,7 @@ from runner.experiment_runner import ExperimentRunner
 from budget_manager import BudgetManager
 from feedback_analyzer import FeedbackAnalyzer
 from analysis.reflection import ReflectionAgent
+from analysis.reflection_executor import ReflectionExecutor
 from analysis.pattern_extractor import PatternExtractor
 from analysis.adaptive_strategy import AdaptiveStrategy
 from trajectory_logger import TrajectoryLogger
@@ -84,8 +87,10 @@ class Agent:
         self.bandit_planner = BanditPlanner(task_type, seed=config.SEED)
         self.retriever = Retriever(task_type)
         self.knowledge_base = KnowledgeBase(f"{output_dir}/knowledge_base.json")
+        self.config_cache = ConfigCache(similarity_threshold=0.85)
         self.topk_pool = TopKPool(max_size=20, path=f"{output_dir}/top_pool_{task_type}.json") if HAS_TOPK else None
         self.ensemble = EnsembleBuilder(task_type)
+        self.reflection_executor.set_topk_pool(self.topk_pool)
         self.pattern_extractor = PatternExtractor()
         self.adaptive_strategy = AdaptiveStrategy()
         self._data_profile = None
@@ -103,6 +108,7 @@ class Agent:
 
         # 反思和规划
         self.reflection = ReflectionAgent(qwen_client=self.qwen_client)
+        self.reflection_executor = ReflectionExecutor(task_type)
         self.qwen_planner = QwenPlanner(qwen_client=self.qwen_client)
 
         # Optuna
@@ -120,6 +126,8 @@ class Agent:
         self.runner: ExperimentRunner | None = None
         self._best_model = None
         self._best_metric = 0.0
+        self._best_config = None
+        self._final_model = None
         self._data = None
 
     def load_data(self):
@@ -184,6 +192,15 @@ class Agent:
                 budget_state=self.budget.remaining_budget(),
             )
 
+            # 搴旂敤鍙嶆€濈粨鏋滃埌鎼滅储绌洪棿
+            space_mod = self.reflection_executor.apply(
+                reflection_result,
+                feedback.get('tried_models', []),
+                candidate_configs,
+            )
+            if space_mod and space_mod.get('action'):
+                print(f'  [Reflection Executor] {space_mod["action"]}: {space_mod.get("modifications", [])[:3]}')
+
             # 4. Qwen Planner 最终决策
             best = self.memory.get_best(self.task_type)
             best_info = {
@@ -205,6 +222,11 @@ class Agent:
             if not config_dict:
                 config_dict = candidate_configs[0] if candidate_configs else {}
 
+            config_dict = self._select_budget_feasible_config(config_dict, candidate_configs)
+            if not config_dict:
+                print("  [STOP] 预算不足，跳过剩余候选")
+                break
+
             model_type = config_dict.get("model_type", selected_arm)
             print(f"\n{'='*60}")
             print(f"Round {round_num}: {model_type}")
@@ -213,11 +235,21 @@ class Agent:
 
             # 5. 检查是否过于相似
             has_hyperparams = model_type not in ("Popularity", "ItemCF")
-            if has_hyperparams and self.retriever.is_too_similar(config_dict, threshold=0.99):
+            if has_hyperparams and self.retriever.is_too_similar(config_dict, threshold=0.85):
                 print("  [SKIP] 配置过于相似")
                 if self.optuna_planner and "_optuna_trial_number" in config_dict:
                     self.optuna_planner.update_result(
                         config_dict["_optuna_trial_number"], 0.0
+                    )
+                round_num += 1
+                continue
+
+            # 5b. 检查实验缓存
+            if self.config_cache.exists(config_dict):
+                print(f'  [SKIP-Cache] 配置已有实验记录')
+                if self.optuna_planner and '_optuna_trial_number' in config_dict:
+                    self.optuna_planner.update_result(
+                        config_dict['_optuna_trial_number'], 0.0
                     )
                 round_num += 1
                 continue
@@ -237,7 +269,8 @@ class Agent:
 
             # 7. 记录实验
             metric_key = "val_accuracy" if self.task_type == "classification" else "ndcg@k"
-            improved = result.metric > self._best_metric
+            prev_best = self._best_metric
+            improved = result.metric > prev_best
 
             record = ExperimentRecord(
                 round_num=round_num,
@@ -255,6 +288,7 @@ class Agent:
             if improved:
                 self._best_metric = result.metric
                 self._best_model = result.model
+                self._best_config = config_dict
                 print(f"  ★ 新最佳! {metric_key}={result.metric:.4f}")
 
             # 9. 更新 Optuna
@@ -277,17 +311,28 @@ class Agent:
             self.bandit_planner.bandit.update_compute_aware(
                 arm=model_type,
                 metric=result.metric,
-                best_metric=self._best_metric,
+                best_metric=prev_best,
                 runtime=result.train_time,
             )
 
             # 12. 添加到 Ensemble
-            if result.model is not None:
+            if result.model is not None and (
+                self.task_type == "recommendation"
+                or isinstance(result.model, torch.nn.Module)
+            ):
                 self.ensemble.add_model(
                     model=result.model,
                     config=config_dict,
                     metric=result.metric,
                 )
+
+            # 12b. 记录实验到缓存
+            self.config_cache.add_entry(
+                config=config_dict,
+                metric=result.metric,
+                model_name=model_type,
+                round_num=round_num,
+            )
 
             # 13. 更新 Retriever 和 KnowledgeBase
             self.retriever.index(self.memory)
@@ -330,6 +375,8 @@ class Agent:
 
             round_num += 1
 
+        self._refit_best_model_if_possible()
+
         # 保存
         self.logger.save()
         if self.optuna_planner:
@@ -347,9 +394,38 @@ class Agent:
 
         return {
             "best_metric": self._best_metric,
-            "best_config": self.memory.get_best(self.task_type).config if self.memory.get_best(self.task_type) else {},
+            "best_config": self._best_config or (self.memory.get_best(self.task_type).config if self.memory.get_best(self.task_type) else {}),
             "num_rounds": round_num,
         }
+
+    def _select_budget_feasible_config(self, selected_config: dict, candidate_configs: list[dict]) -> dict | None:
+        ordered: list[dict] = []
+        if selected_config:
+            ordered.append(selected_config)
+        for cfg in candidate_configs:
+            if cfg and cfg not in ordered:
+                ordered.append(cfg)
+
+        for cfg in ordered:
+            if self.budget.can_run(cfg):
+                return cfg
+        return None
+
+    def _refit_best_model_if_possible(self):
+        if not self.runner or not self._best_config:
+            return
+
+        if not self.budget.can_run(self._best_config):
+            print("[Agent] 跳过最终重训：预算不足")
+            self._final_model = self._best_model
+            return
+
+        try:
+            print("[Agent] 使用全部训练数据重训最佳配置")
+            self._final_model = self.runner.fit_full(self._best_config)
+        except Exception as exc:
+            print(f"[Agent] 最终重训失败，回退到轮次最佳模型: {exc}")
+            self._final_model = self._best_model
 
     def _generate_candidates(self, model_type: str) -> list[dict]:
         """生成候选配置。
@@ -403,6 +479,17 @@ class Agent:
 
     def _generate_cls_submission(self, output_path: str):
         data = self._data
+        model = self._final_model or self._best_model
+        if model is None:
+            print("[Agent] 没有可用的分类模型")
+            return
+
+        predictions = self._predict_cls_model(model, data)
+        import pandas as pd
+        df = pd.DataFrame({"test_idx": data["test_idx"], "label": predictions})
+        df.to_csv(output_path, index=False)
+        print(f"  提交文件已生成: {output_path} ({len(df)} 行)")
+        return
         from data_loader import classification_to_pyg
         pyg_data = classification_to_pyg(data, self.device)
 
@@ -422,21 +509,46 @@ class Agent:
         df.to_csv(output_path, index=False)
         print(f"  提交文件已生成: {output_path} ({len(df)} 行)")
 
+    def _predict_cls_model(self, model, data):
+        from data_loader import classification_to_pyg
+
+        pyg_data = classification_to_pyg(data, self.device)
+        if hasattr(model, "predict") and not hasattr(model, "convs"):
+            if self._best_config and self.runner:
+                _, all_features, _, _ = self.runner._prepare_classification_inputs(self._best_config)
+            else:
+                all_features = data["features"].toarray()
+            return model.predict(all_features[data["test_idx"]])
+
+        if len(self.ensemble) >= 2:
+            print("  使用集成模型预测")
+            return self.ensemble.predict_cls(pyg_data, self.device)
+
+        print("  使用单一最佳图模型预测")
+        return predict_gnn(model, pyg_data)
+
     def _generate_rec_submission(self, output_path: str):
         test_df = self._data["test_df"]
+        model = self._final_model or self._best_model
+        if model is None:
+            print("[Agent] 没有可用的推荐模型")
+            return
+
         results = []
 
         for _, row in test_df.iterrows():
             uid = row["uid"]
             seq = parse_seq_dedup(row["item_seq_dedup"])
+            seq_counts = parse_seq_counts(row["item_seq_counts"]) if "item_seq_counts" in row else None
 
             # 优先使用集成模型
             if len(self.ensemble) >= 2:
                 pred_list = self.ensemble.predict_rec(uid, seq, top_k=10)
-            elif self._best_model is not None:
-                pred_list = self._best_model.predict(uid, seq, top_k=10)
             else:
-                pred_list = []
+                try:
+                    pred_list = model.predict(uid, seq, seq_counts=seq_counts, top_k=10)
+                except TypeError:
+                    pred_list = model.predict(uid, seq, top_k=10)
 
             results.append({"uid": uid, "prediction": ",".join(pred_list)})
 

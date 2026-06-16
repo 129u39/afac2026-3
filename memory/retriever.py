@@ -66,7 +66,7 @@ class Retriever:
         results = self.top_k_similar(config, k=1)
         return results[0] if results else None
 
-    def is_too_similar(self, config: dict, threshold: float = 0.99) -> bool:
+    def is_too_similar(self, config: dict, threshold: float = 0.85) -> bool:
         """检查配置是否与已有实验过于相似。
 
         Args:

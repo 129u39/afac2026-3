@@ -1,170 +1,156 @@
-"""混合推荐器 V3：序列优先 + 共现 + 流行度。"""
+"""Sequence-aware recommendation heuristics."""
 
-import numpy as np
-import pandas as pd
+from __future__ import annotations
+
 from collections import Counter, defaultdict
-from data_loader import parse_seq_dedup, parse_seq_counts
+
+import pandas as pd
+
+from data_loader import parse_seq_counts, parse_seq_dedup
+
+
+def _safe_float(value: float) -> float:
+    return float(value) if value > 0 else 0.0
 
 
 class HybridRecommender:
-    """混合推荐器 V3。
-
-    关键发现：56.4% 的目标物品在用户序列中出现！
-
-    策略：
-    1. 序列内物品优先（最重要）
-    2. 序列共现分数
-    3. 物品流行度
-
-    NDCG@10: 0.6951
-    """
+    """Balanced scorer using co-occurrence, popularity, and sequence evidence."""
 
     def __init__(self):
         self.item_scores = {}
-        self.item_cooccur = {}
+        self.item_cooccur = defaultdict(Counter)
         self.all_iid = []
         self.target_items = set()
+        self.target_popularity = Counter()
 
     def fit(self, rec_data: dict):
-        """训练模型。"""
         train_df = rec_data["train_df"]
         self.all_iid = rec_data["all_iid"]
 
-        # 1. 计算物品流行度
-        counter = Counter()
+        item_counter = Counter()
         for _, row in train_df.iterrows():
             counts = parse_seq_counts(row["item_seq_counts"])
             for iid, cnt in counts.items():
-                counter[iid] += cnt
+                item_counter[iid] += cnt
             if pd.notna(row["target_iid"]):
-                counter[row["target_iid"]] += 1
+                target = str(row["target_iid"])
+                item_counter[target] += 1
+                self.target_popularity[target] += 1
 
-        total = sum(counter.values()) or 1
-        self.item_scores = {iid: counter.get(iid, 0) / total for iid in self.all_iid}
+        total = sum(item_counter.values()) or 1
+        self.item_scores = {iid: item_counter.get(iid, 0) / total for iid in self.all_iid}
 
-        # 2. 计算序列共现
-        cooccur = defaultdict(Counter)
         for _, row in train_df.iterrows():
             seq = parse_seq_dedup(str(row["item_seq_dedup"]))
             target = row["target_iid"]
-            if pd.notna(target):
-                for iid in seq:
-                    if iid != target:
-                        cooccur[target][iid] += 1
-                        cooccur[iid][target] += 1
-        self.item_cooccur = cooccur
+            if pd.isna(target):
+                continue
+            target = str(target)
+            for pos, iid in enumerate(seq):
+                decay = 1.0 + 0.5 * (pos / max(len(seq), 1))
+                self.item_cooccur[target][iid] += decay
+                self.item_cooccur[iid][target] += decay
 
-        # 3. 记录目标物品
-        self.target_items = set(train_df["target_iid"].unique())
+        self.target_items = set(train_df["target_iid"].dropna().astype(str).unique())
 
-    def predict(self, uid: str, seq_dedup: list[str], top_k: int = 10) -> list[str]:
-        """为用户生成推荐。"""
+    def _sequence_signal(self, iid: str, seq_dedup: list[str], seq_counts: dict[str, int]) -> float:
+        if iid not in seq_dedup:
+            return 0.0
+
+        positions = [idx for idx, item in enumerate(seq_dedup) if item == iid]
+        if not positions:
+            return 0.0
+
+        latest_pos = max(positions)
+        count_boost = 1.0 + 0.1 * seq_counts.get(iid, 0)
+        recency_boost = 1.0 + 0.5 * (latest_pos / max(len(seq_dedup), 1))
+        return count_boost * recency_boost
+
+    def predict(self, uid: str, seq_dedup: list[str], seq_counts=None, top_k: int = 10) -> list[str]:
+        seq_counts = seq_counts or {}
         seq_set = set(seq_dedup)
 
-        # 计算每个候选物品的分数
         scores = {}
-
         for iid in self.all_iid:
-            if iid in seq_set:
-                continue
-
             score = 0.0
 
-            # 1. 序列共现分数（权重 0.7）
             if iid in self.item_cooccur:
                 cooccur_score = 0.0
-                for seq_iid in seq_dedup:
+                for pos, seq_iid in enumerate(seq_dedup):
                     if seq_iid in self.item_cooccur[iid]:
-                        cooccur_score += self.item_cooccur[iid][seq_iid]
-                cooccur_score = cooccur_score / max(len(seq_dedup), 1)
-                score += 0.7 * min(cooccur_score, 1.0)
+                        weight = 1.0 + 0.4 * (pos / max(len(seq_dedup), 1))
+                        weight += 0.05 * seq_counts.get(seq_iid, 0)
+                        cooccur_score += self.item_cooccur[iid][seq_iid] * weight
+                score += 0.55 * min(cooccur_score / max(len(seq_dedup), 1), 1.5)
 
-            # 2. 流行度分数（权重 0.3）
-            pop_score = self.item_scores.get(iid, 0.0)
-            score += 0.3 * pop_score
+            score += 0.25 * self.item_scores.get(iid, 0.0)
+            score += 0.20 * self._sequence_signal(iid, seq_dedup, seq_counts)
+            if iid in seq_set:
+                score += 0.10 * (1.0 + 0.1 * seq_counts.get(iid, 0))
 
             scores[iid] = score
 
-        # 按分数排序
-        ranked = sorted(scores.items(), key=lambda x: -x[1])
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return [iid for iid, _ in ranked[:top_k]]
 
 
 class SequenceFirstRecommender:
-    """序列优先推荐器。
-
-    直接利用序列信息：如果目标物品在序列中，直接返回。
-    否则使用共现+流行度。
-
-    NDCG@10: 0.6951
-    """
+    """Prioritize items already present in the user's history."""
 
     def __init__(self):
         self.item_scores = {}
-        self.item_cooccur = {}
+        self.item_cooccur = defaultdict(Counter)
         self.all_iid = []
-        self.target_items = set()
 
     def fit(self, rec_data: dict):
-        """训练模型。"""
         train_df = rec_data["train_df"]
         self.all_iid = rec_data["all_iid"]
 
-        # 计算物品流行度
         counter = Counter()
         for _, row in train_df.iterrows():
             counts = parse_seq_counts(row["item_seq_counts"])
             for iid, cnt in counts.items():
                 counter[iid] += cnt
             if pd.notna(row["target_iid"]):
-                counter[row["target_iid"]] += 1
+                counter[str(row["target_iid"])] += 1
 
         total = sum(counter.values()) or 1
         self.item_scores = {iid: counter.get(iid, 0) / total for iid in self.all_iid}
 
-        # 计算序列共现
-        cooccur = defaultdict(Counter)
         for _, row in train_df.iterrows():
             seq = parse_seq_dedup(str(row["item_seq_dedup"]))
             target = row["target_iid"]
-            if pd.notna(target):
-                for iid in seq:
-                    if iid != target:
-                        cooccur[target][iid] += 1
-                        cooccur[iid][target] += 1
-        self.item_cooccur = cooccur
+            if pd.isna(target):
+                continue
+            target = str(target)
+            for pos, iid in enumerate(seq):
+                if iid == target:
+                    continue
+                self.item_cooccur[target][iid] += 1.0 / (1.0 + pos)
 
-        # 记录目标物品
-        self.target_items = set(train_df["target_iid"].unique())
-
-    def predict(self, uid: str, seq_dedup: list[str], top_k: int = 10) -> list[str]:
-        """为用户生成推荐。"""
+    def predict(self, uid: str, seq_dedup: list[str], seq_counts=None, top_k: int = 10) -> list[str]:
+        seq_counts = seq_counts or {}
         seq_set = set(seq_dedup)
-
-        # 计算每个候选物品的分数
         scores = {}
 
         for iid in self.all_iid:
-            if iid in seq_set:
-                continue
-
             score = 0.0
 
-            # 1. 序列共现分数（权重 0.7）
+            if iid in seq_set:
+                positions = [idx for idx, item in enumerate(seq_dedup) if item == iid]
+                latest_pos = max(positions)
+                score += 1.2 + 0.6 * (latest_pos / max(len(seq_dedup), 1))
+                score += 0.1 * seq_counts.get(iid, 0)
+
             if iid in self.item_cooccur:
-                cooccur_score = 0.0
-                for seq_iid in seq_dedup:
+                cooccur = 0.0
+                for pos, seq_iid in enumerate(seq_dedup):
                     if seq_iid in self.item_cooccur[iid]:
-                        cooccur_score += self.item_cooccur[iid][seq_iid]
-                cooccur_score = cooccur_score / max(len(seq_dedup), 1)
-                score += 0.7 * min(cooccur_score, 1.0)
+                        cooccur += self.item_cooccur[iid][seq_iid] / (1.0 + pos)
+                score += 0.45 * min(cooccur, 1.5)
 
-            # 2. 流行度分数（权重 0.3）
-            pop_score = self.item_scores.get(iid, 0.0)
-            score += 0.3 * pop_score
-
+            score += 0.15 * self.item_scores.get(iid, 0.0)
             scores[iid] = score
 
-        # 按分数排序
-        ranked = sorted(scores.items(), key=lambda x: -x[1])
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return [iid for iid, _ in ranked[:top_k]]

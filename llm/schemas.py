@@ -66,3 +66,24 @@ class ResearchResult(BaseModel):
         description="风险评估",
         default="none",
     )
+
+
+class HPOSuggestion(BaseModel):
+    """LLM 驱动的超参数优化建议。"""
+
+    reasoning: str = Field(
+        description="基于实验历史的分析推理，说明为什么要调整这些参数"
+    )
+    config_updates: dict = Field(
+        description="要修改的超参数及其新值（只包含要更新的参数）",
+        examples=[{"learning_rate": 0.01, "n_estimators": 500}],
+    )
+    unchanged_params: list[str] = Field(
+        description="建议保持不变的参数列表",
+        default_factory=list,
+    )
+    confidence: float = Field(
+        description="对此建议的置信度 (0~1)",
+        ge=0.0,
+        le=1.0,
+    )

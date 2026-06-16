@@ -94,9 +94,15 @@ class UCBBandit:
         if arm not in self.arms:
             raise ValueError(f"Unknown arm: {arm}")
 
-        # 计算 compute-aware reward
+        # 计算 compute-aware reward (归一化奖励)
+        # improvement_ratio: (metric - best_metric) / max(best_metric, 1e-6)
+        # speed_score: 1 / runtime
+        # reward = 0.7 * improvement_ratio + 0.3 * speed_score
         if runtime > 0:
-            reward = max(0, metric - best_metric) / runtime
+            improvement = max(0, metric - best_metric)
+            improvement_ratio = improvement / max(best_metric, 1e-6)
+            speed_score = 1.0 / max(runtime, 1e-6)
+            reward = 0.7 * improvement_ratio + 0.3 * speed_score
         else:
             reward = 0.0
 

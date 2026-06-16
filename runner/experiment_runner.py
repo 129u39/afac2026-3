@@ -87,6 +87,113 @@ class ExperimentRunner:
                 error=str(e),
             )
 
+    def fit_full(self, config: dict):
+        """用全部训练数据重训最终提交模型。"""
+        if self.task_type == "classification":
+            return self._fit_full_classification(config)
+        return self._fit_full_recommendation(config)
+
+    def _prepare_classification_inputs(self, config: dict):
+        data = self.data
+        pyg_data = classification_to_pyg(data, self.device)
+
+        features = data["features"].toarray()
+        labels = data["labels"]
+        train_idx = data["train_idx"]
+
+        feature_selector_type = config.get("feature_selector", "none")
+        feature_dim = config.get("feature_dim", 256)
+
+        if feature_selector_type == "lgb" and HAS_NEW_MODELS:
+            selector = LGBSelector(n_top_features=feature_dim)
+            selector.fit(features[train_idx], labels[train_idx])
+            all_features = selector.transform(data["features"].toarray())
+        elif feature_selector_type == "xgb" and HAS_NEW_MODELS:
+            selector = XGBSelector(n_top_features=feature_dim)
+            selector.fit(features[train_idx], labels[train_idx])
+            all_features = selector.transform(data["features"].toarray())
+        else:
+            all_features = features
+
+        return pyg_data, all_features, labels, train_idx
+
+    def _fit_full_classification(self, config: dict):
+        data = self.data
+        pyg_data, all_features, labels, train_idx = self._prepare_classification_inputs(config)
+        model_type = config.get("model_type", "MLP")
+
+        if model_type == "LightGBM" and HAS_NEW_MODELS:
+            model = LightGBMModel(
+                n_estimators=config.get("n_estimators", 500),
+                max_depth=config.get("max_depth", 6),
+                learning_rate=config.get("learning_rate", config.get("lr", 0.05)),
+            )
+            model.fit(all_features[train_idx], labels[train_idx])
+            return model
+
+        if model_type == "GCNII" and HAS_NEW_MODELS:
+            model = GCNII(
+                in_dim=all_features.shape[1],
+                hidden_dim=config.get("hidden_dim", 256),
+                num_classes=data["num_classes"],
+                num_layers=config.get("num_layers", 16),
+                dropout=config.get("dropout", 0.3),
+                alpha=config.get("alpha", 0.1),
+                theta=config.get("theta", 0.5),
+            ).to(self.device)
+            train_gcnii(
+                model, pyg_data,
+                lr=config.get("lr", 0.01),
+                weight_decay=config.get("weight_decay", 5e-4),
+                epochs=max(20, config.get("epochs", 200) // 2),
+                patience=config.get("patience", 30),
+                full_train=True,
+            )
+            return model
+
+        if model_type == "MLP" and HAS_NEW_MODELS:
+            model = MLPBaseline(
+                in_dim=all_features.shape[1],
+                hidden_dim=config.get("hidden_dim", 512),
+                num_classes=data["num_classes"],
+                num_layers=config.get("num_layers", 2),
+                dropout=config.get("dropout", 0.3),
+            ).to(self.device)
+            train_mlp(
+                model, pyg_data,
+                lr=config.get("lr", 0.01),
+                weight_decay=config.get("weight_decay", 5e-4),
+                epochs=max(20, config.get("epochs", 200) // 2),
+                patience=config.get("patience", 30),
+                full_train=True,
+            )
+            return model
+
+        model = GNNClassifier(
+            in_dim=data["num_features"],
+            hidden_dim=config.get("hidden_dim", 128),
+            num_classes=data["num_classes"],
+            num_layers=config.get("num_layers", 3),
+            model_type=model_type,
+            dropout=config.get("dropout", 0.1),
+        ).to(self.device)
+        train_gnn(
+            model, pyg_data,
+            lr=config.get("lr", 0.005),
+            weight_decay=config.get("weight_decay", 5e-4),
+            epochs=max(20, config.get("epochs", 200) // 2),
+            patience=config.get("patience", 30),
+            full_train=True,
+        )
+        return model
+
+    def _fit_full_recommendation(self, config: dict):
+        model_type = config.get("model_type", "Popularity")
+        kwargs = {k: v for k, v in config.items() if k != "model_type"}
+        rec_sys = RecommenderSystem(model_type=model_type, **kwargs)
+        rec_sys.fit(self.data)
+        return rec_sys
+
     def _run_classification(self, config: dict) -> ExperimentResult:
         """执行分类实验。"""
         import numpy as np
@@ -123,7 +230,7 @@ class ExperimentRunner:
             model = LightGBMModel(
                 n_estimators=config.get("n_estimators", 500),
                 max_depth=config.get("max_depth", 6),
-                learning_rate=config.get("learning_rate", 0.05),
+                learning_rate=config.get("learning_rate", config.get("lr", 0.05)),
             )
             train_features = all_features[train_idx]
             train_labels = labels[train_idx]

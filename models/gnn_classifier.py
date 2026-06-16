@@ -75,6 +75,7 @@ def train_gnn(
     epochs: int = 200,
     patience: int = 30,
     val_mask=None,
+    full_train: bool = False,
     device=None,
 ) -> dict:
     """训练 GNN 分类器。
@@ -95,7 +96,11 @@ def train_gnn(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # 划分验证集
-    if val_mask is None:
+    if full_train:
+        real_train_mask = data.train_mask
+        val_mask = data.train_mask
+        patience = epochs
+    elif val_mask is None:
         train_idx = data.train_mask.nonzero(as_tuple=False).squeeze()
         n = train_idx.size(0)
         perm = torch.randperm(n)
@@ -140,10 +145,10 @@ def train_gnn(
             best_val_acc = val_acc
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             no_improve = 0
-        else:
+        elif not full_train:
             no_improve += 1
 
-        if no_improve >= patience:
+        if not full_train and no_improve >= patience:
             break
 
     # 恢复最佳模型
