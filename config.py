@@ -27,7 +27,8 @@ SAFETY_MARGIN_SECONDS = 300  # 预留5分钟生成提交
 CLS_SEARCH_SPACE = {
     "model_type": ["LightGBM", "MLP", "GraphSAGE", "GCNII"],
     "hidden_dim": [256, 512],
-    "num_layers": [2, 3, 8, 16],
+    # GCNII: layers=[8,16,32,64] alpha=[0.1,0.2,0.3] theta=[0.5,1.0,1.5]
+    "num_layers": [2, 3, 8, 16, 32, 64],
     "dropout": [0.2, 0.3, 0.4, 0.5],
     "lr": [5e-4, 1e-3, 2e-3, 5e-3, 1e-2],
     "weight_decay": [0.0, 1e-5, 5e-5, 1e-4, 5e-4],

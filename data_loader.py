@@ -46,16 +46,30 @@ def load_classification(path: str) -> dict:
     }
 
 
-def classification_to_pyg(data: dict, device: torch.device = torch.device("cpu")) -> Data:
-    """将分类数据转换为 PyG Data 对象。"""
+def classification_to_pyg(
+    data: dict,
+    device: torch.device = torch.device("cpu"),
+    selected_features: np.ndarray | None = None,
+) -> Data:
+    """将分类数据转换为 PyG Data 对象。
+
+    Args:
+        data: 数据字典
+        device: 计算设备
+        selected_features: 可选的特征选择后的特征矩阵 (N, D_selected)
+    """
     adj = data["adj_csr"]
     # 转为 COO 格式获取边索引
     adj_coo = adj.tocoo()
     edge_index = torch.tensor(np.vstack([adj_coo.row, adj_coo.col]), dtype=torch.long)
     edge_weight = torch.tensor(adj_coo.data, dtype=torch.float32)
 
-    # 稠密化特征矩阵 (13752 x 767 不算太大)
-    feat_dense = torch.tensor(data["features"].toarray(), dtype=torch.float32)
+    # 支持特征选择后的输入
+    if selected_features is not None:
+        feat_dense = torch.tensor(selected_features, dtype=torch.float32)
+        print(f"[FEATURE] original_dim={data['num_features']} -> selected_dim={selected_features.shape[1]}")
+    else:
+        feat_dense = torch.tensor(data["features"].toarray(), dtype=torch.float32)
 
     labels = torch.tensor(data["labels"], dtype=torch.long)
     train_mask = torch.zeros(data["num_nodes"], dtype=torch.bool)
