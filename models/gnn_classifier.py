@@ -77,6 +77,7 @@ def train_gnn(
     val_mask=None,
     full_train: bool = False,
     device=None,
+    verbose: bool = True,
 ) -> dict:
     """训练 GNN 分类器。
 
@@ -88,11 +89,16 @@ def train_gnn(
         epochs: 最大轮次
         patience: 早停轮次
         val_mask: 验证集 mask (若无则从 train_mask 中划分)
+        full_train: 是否全量训练（无验证）
         device: 计算设备
+        verbose: 是否每轮输出日志
 
     返回:
-        {"best_val_acc": float, "train_losses": list, "val_accs": list}
+        {"best_val_acc": float, "train_losses": list, "val_accs": list,
+         "macro_f1": float, "balanced_acc": float}
     """
+    from sklearn.metrics import f1_score, balanced_accuracy_score
+
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # 划分验证集
@@ -117,6 +123,8 @@ def train_gnn(
 
     best_val_acc = 0.0
     best_state = None
+    best_macro_f1 = 0.0
+    best_balanced_acc = 0.0
     no_improve = 0
     train_losses = []
     val_accs = []
@@ -141,14 +149,28 @@ def train_gnn(
             val_acc = (pred[val_mask] == data.y[val_mask]).float().mean().item()
             val_accs.append(val_acc)
 
+            # 计算 macro_f1 和 balanced_acc
+            val_preds = pred[val_mask].cpu().numpy()
+            val_true = data.y[val_mask].cpu().numpy()
+            macro_f1 = f1_score(val_true, val_preds, average="macro", zero_division=0)
+            balanced_acc = balanced_accuracy_score(val_true, val_preds)
+
+        if verbose:
+            print(f"[TRAIN] epoch={epoch + 1} loss={loss.item():.4f}")
+            print(f"[VAL] acc={val_acc:.4f} macro_f1={macro_f1:.4f} balanced_acc={balanced_acc:.4f}")
+
         if val_acc > best_val_acc:
             best_val_acc = val_acc
+            best_macro_f1 = macro_f1
+            best_balanced_acc = balanced_acc
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             no_improve = 0
         elif not full_train:
             no_improve += 1
 
         if not full_train and no_improve >= patience:
+            if verbose:
+                print(f"[EARLY STOP] epoch={epoch + 1}")
             break
 
     # 恢复最佳模型
@@ -159,6 +181,8 @@ def train_gnn(
         "best_val_acc": best_val_acc,
         "train_losses": train_losses,
         "val_accs": val_accs,
+        "macro_f1": best_macro_f1,
+        "balanced_acc": best_balanced_acc,
     }
 
 
