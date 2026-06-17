@@ -2,5 +2,6 @@ data/
 __pycache__/
 models/__pycache__/
 output/
+cache/
 .env
 .venv/
