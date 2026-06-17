@@ -78,6 +78,7 @@ def train_gnn(
     full_train: bool = False,
     device=None,
     verbose: bool = True,
+    class_weights: torch.Tensor | None = None,
 ) -> dict:
     """训练 GNN 分类器。
 
@@ -100,6 +101,14 @@ def train_gnn(
     from sklearn.metrics import f1_score, balanced_accuracy_score
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    # 类别加权损失函数
+    if class_weights is not None:
+        loss_fn = nn.CrossEntropyLoss(weight=class_weights)
+        loss_used = "weighted_ce"
+    else:
+        loss_fn = F.cross_entropy
+        loss_used = "ce"
 
     # 划分验证集
     if full_train:
@@ -135,7 +144,7 @@ def train_gnn(
         model.train()
         optimizer.zero_grad()
         out = model(data)
-        loss = F.cross_entropy(out[real_train_mask], data.y[real_train_mask])
+        loss = loss_fn(out[real_train_mask], data.y[real_train_mask])
         loss.backward()
         optimizer.step()
 

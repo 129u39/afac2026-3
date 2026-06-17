@@ -63,39 +63,33 @@ class HybridExpert(nn.Module):
         """
         x, edge_index = data.x, data.edge_index
 
+        # 计算孤立节点掩码（若未传入）
+        if isolated_mask is None:
+            deg = x.new_zeros(x.size(0))
+            deg.scatter_add_(0, edge_index[0], x.new_ones(edge_index.size(1)))
+            isolated_mask = (deg == 0)
+
+        n_isolated = isolated_mask.sum().item()
+        n_graph = (~isolated_mask).sum().item()
+        print(f"[EXPERT] isolated_nodes={n_isolated} graph_nodes={n_graph}")
+
         # Shared encoder
         x = self.shared(x)
         x = self.shared_norm(x)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        if isolated_mask is None:
-            isolated_mask = (data.edge_index.size(1) == 0)
+        # GraphSAGE on ALL nodes (uses full graph)
+        sage_out = x
+        for i, conv in enumerate(self.sage_convs):
+            sage_out = conv(sage_out, edge_index)
+            sage_out = self.sage_norms[i](sage_out)
+            sage_out = F.relu(sage_out)
+            sage_out = F.dropout(sage_out, p=self.dropout, training=self.training)
 
-        n_isolated = isolated_mask.sum().item()
-        n_graph = (~isolated_mask).sum().item()
-        print(f"[EXPERT] isolated_nodes={n_isolated} graph_nodes={n_graph}")
-
-        # MLP Head: 孤立节点
-        mlp_out = self.mlp(x[isolated_mask]) if n_isolated > 0 else x[:0]
-
-        # GraphSAGE Head: 有邻居节点
-        if n_graph > 0:
-            sage_x = x[~isolated_mask]
-            for i, conv in enumerate(self.sage_convs):
-                sage_x = conv(sage_x, edge_index)
-                sage_x = self.sage_norms[i](sage_x)
-                sage_x = F.relu(sage_x)
-                sage_x = F.dropout(sage_x, p=self.dropout, training=self.training)
-            sage_out = sage_x
-        else:
-            sage_out = x[:0]
-
-        # 合并
-        final = torch.zeros_like(x)
+        # MLP Head: 只对孤立节点
         if n_isolated > 0:
-            final[isolated_mask] = mlp_out
-        if n_graph > 0:
-            final[~isolated_mask] = sage_out
+            mlp_out = self.mlp(x[isolated_mask])
+            sage_out[isolated_mask] = mlp_out
 
-        return self.classifier(final)
+        return self.classifier(sage_out)
