@@ -32,7 +32,7 @@ class TestFixedSplit:
 
     def test_get_fixed_split(self):
         import tempfile, os, pickle
-        from splits.fixed_split import get_fixed_split
+        from utils.fixed_split import get_fixed_split
 
         train_idx = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
         labels = np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])

@@ -1,440 +1,330 @@
-# AFAC2026-3 Classification Recovery Code Plan
-
-## Version
-
-v2.0
+# AFAC2026-A1 Classification Improvement Plan
 
 ## Current Status
 
-当前验证精度：
+### Dataset
 
-```text
-0.50 ~ 0.55
-```
+* Nodes: 13,752
+* Features: 767
+* Classes: 10
+* Train Nodes: 11,001
+* Test Nodes: 2,751
 
-当前系统：
+### Graph Statistics
 
-```text
-GraphSAGE
-GCN
-GAT
-GCNII(4层)
+* Average Degree: 2.04
+* Isolated Node Ratio: 31.0%
+* Feature Sparsity: 82.2%
+* Class Imbalance: 17.7×
 
-Bandit
-Optuna
-Reflection
-KnowledgeBase
-```
+### Current Best Result
 
-问题：
-
-当前 Agent 搜索框架复杂度远高于模型能力。
-
-模型搜索空间没有覆盖真正高收益区域。
+| Model             | Validation Accuracy |
+| ----------------- | ------------------- |
+| Hybrid            | 0.6243              |
+| Enhanced LightGBM | 0.5043              |
+| LGB Ensemble      | 0.4993              |
+| Raw LightGBM      | 0.3857              |
 
 ---
 
-# Phase 0 数据诊断（最高优先级）
+# Goal
 
-## 新增
+## Short-term
+
+Validation Accuracy ≥ 0.70
+
+## Mid-term
+
+Validation Accuracy ≥ 0.75
+
+## Final Target
+
+Validation Accuracy ≥ 0.80
+
+---
+
+# Phase 1: Benchmark Framework
+
+## Objective
+
+建立可信基线，明确性能来源。
+
+## Tasks
+
+新增目录：
 
 ```text
-analysis/data_diagnostics.py
+models/
+├── mlp.py
+├── graphsage.py
+├── gcnii.py
+├── label_propagation.py
 ```
 
-### 输出
+统一接口：
 
 ```python
-num_nodes
-num_edges
-avg_degree
-density
-num_classes
-train_size
-test_size
-```
-
-### 类别分布
-
-```python
-np.bincount(labels[train_idx])
-```
-
-输出：
-
-```text
-[DATA]
-Class Distribution:
-Class0=...
-Class1=...
-...
-```
-
----
-
-## 连通性分析
-
-新增：
-
-```python
-from scipy.sparse.csgraph import connected_components
-```
-
-输出：
-
-```text
-[GRAPH]
-Connected Components: 127
-
-Largest Component Ratio: 0.91
-```
-
----
-
-## 孤立节点统计
-
-输出：
-
-```text
-[GRAPH]
-Isolated Nodes: 532
-Ratio: 3.8%
-```
-
----
-
-## 日志格式
-
-```python
-logger.info(
-    f"[DATA] nodes={n_nodes} "
-    f"edges={n_edges} "
-    f"avg_degree={avg_degree:.2f}"
-)
-```
-
----
-
-# Phase 1 固定验证集
-
-## 当前问题
-
-train_gnn()
-
-切一次。
-
+fit()
+predict()
 evaluate()
-
-再切一次。
-
-导致：
-
-```text
-训练目标 ≠ 搜索目标
 ```
-
----
-
-## 修改
 
 新增：
 
-```python
-splitter.py
+```text
+benchmark_runner.py
 ```
 
-### 初始化时生成
+统一输出：
+
+```text
+================================
+Benchmark Results
+================================
+
+MLP                0.xxxx
+LightGBM           0.xxxx
+GraphSAGE          0.xxxx
+GCNII              0.xxxx
+LabelPropagation   0.xxxx
+
+================================
+```
+
+## Deliverable
+
+获得可靠基线排行榜。
+
+---
+
+# Phase 2: Stable Validation Split
+
+## Problem
+
+当前训练与评估存在不同划分。
+
+会导致：
+
+* Optuna误导
+* Bandit误导
+* 结果不可复现
+
+## Tasks
+
+新增：
+
+```text
+utils/fixed_split.py
+```
+
+固定：
+
+```python
+seed = 42
+```
+
+保存：
+
+```text
+cache/split.pkl
+```
+
+内容：
 
 ```python
 train_idx
 val_idx
 ```
 
-固定保存。
+所有模型共用。
 
-```python
-split_cache.pkl
-```
-
----
-
-## 所有模型共用
-
-```python
-train_mask
-val_mask
-```
-
----
-
-## 输出
+## Log
 
 ```text
 [SPLIT]
-train=8421
-val=2105
 
+train=8800
+val=2201
 seed=42
 ```
 
 ---
 
-# Phase 2 MLP Benchmark
+# Phase 3: Long-tail Learning
+
+## Problem
+
+类别不平衡：
+
+```text
+17.7×
+```
+
+## Tasks
 
 新增：
 
 ```text
-models/mlp_baseline.py
+losses/
+├── weighted_ce.py
+├── focal_loss.py
 ```
 
-结构：
+### Weighted Cross Entropy
 
 ```python
-767
- ->
-512
- ->
+weight[c] =
+N / (num_classes * count[c])
+```
+
+### Focal Loss
+
+搜索：
+
+```python
+gamma ∈ {1,2,3}
+```
+
+## Logs
+
+```text
+[CLASS_WEIGHT]
+
+min=0.12
+max=2.15
+```
+
+```text
+[LOSS]
+
+type=focal
+gamma=2
+```
+
+## Metrics
+
+同时记录：
+
+```python
+accuracy
+macro_f1
+balanced_accuracy
+```
+
+## Deliverable
+
+Accuracy > 0.68
+
+---
+
+# Phase 4: GraphSAGE Main Track
+
+## Reason
+
+当前图：
+
+```text
+avg_degree=2.04
+isolated=31%
+```
+
+GraphSAGE通常比GCN更稳。
+
+## Search Space
+
+```python
+hidden_dim:
+64
+128
 256
- ->
-10
+
+layers:
+2
+3
+4
+
+dropout:
+0.3
+0.5
+0.7
+
+lr:
+1e-2
+5e-3
+1e-3
 ```
+
+## Log
+
+```text
+[SAGE]
+
+hidden=256
+layers=3
+dropout=0.5
+
+acc=0.712
+```
+
+## Deliverable
+
+Accuracy > 0.70
 
 ---
 
-## 输出日志
+# Phase 5: Deep GCNII
 
-```text
-[MLP]
-epoch=20
-val_acc=0.6342
-```
+## Problem
 
----
+当前GCNII仅4层。
 
-## 目的
+没有发挥GCNII优势。
 
-验证：
-
-```text
-图结构是否真正有用
-```
-
----
-
-# Phase 3 LightGBM Benchmark
-
-新增：
-
-```text
-models/lgb_baseline.py
-```
-
-输入：
+## Search Space
 
 ```python
-features.toarray()
-```
-
-直接训练。
-
----
-
-## 输出
-
-```text
-[LGB]
-num_features=767
-
-val_acc=0.71
-```
-
----
-
-## 判断
-
-如果：
-
-```text
-LGB > GNN
-```
-
-说明：
-
-```text
-图结构质量不足
-```
-
-搜索策略要重构。
-
----
-
-# Phase 4 真正启用 Feature Selection
-
-## 当前问题
-
-FeatureSelector结果未进入PyG。
-
----
-
-## 修改
-
-classification_to_pyg()
-
-支持：
-
-```python
-selected_features
-```
-
-参数。
-
----
-
-## 新逻辑
-
-```python
-pyg_data.x =
-selected_features
-```
-
-而不是：
-
-```python
-features.toarray()
-```
-
----
-
-## 日志
-
-```text
-[FEATURE]
-original_dim=767
-
-selected_dim=128
-```
-
----
-
-# Phase 5 深层GCNII
-
-## 当前
-
-```python
-layers=4
-```
-
----
-
-## 新搜索空间
-
-```python
-layers
-
+layers:
 8
 16
 32
-64
-```
 
----
-
-## 新参数
-
-```python
-alpha
-
+alpha:
 0.1
 0.2
 0.3
-```
 
-```python
-theta
-
+theta:
 0.5
 1.0
 1.5
 ```
 
----
-
-## 日志
+## Log
 
 ```text
 [GCNII]
-layers=32
+
+layers=16
 alpha=0.2
 theta=1.0
 
-best_val_acc=0.78
+acc=0.756
 ```
+
+## Deliverable
+
+超过GraphSAGE。
 
 ---
 
-# Phase 6 图结构增强
+# Phase 6: Label Propagation
 
-新增：
+## Objective
 
-```text
-features/graph_features.py
-```
+验证图结构同质性。
 
----
-
-## Degree
-
-```python
-degree
-log_degree
-```
-
----
-
-## PageRank
-
-```python
-pagerank
-```
-
----
-
-## KCore
-
-```python
-kcore
-```
-
----
-
-## 拼接
-
-```python
-X =
-[
-feature
-degree
-pagerank
-]
-```
-
----
-
-## 日志
-
-```text
-[GRAPH_FEATURE]
-
-degree=True
-pagerank=True
-kcore=True
-
-new_dim=771
-```
-
----
-
-# Phase 7 Label Propagation
+## Tasks
 
 新增：
 
@@ -442,243 +332,316 @@ new_dim=771
 models/label_propagation.py
 ```
 
----
-
-## 目的
-
-验证图同质性。
-
----
-
-## 输出
+## Log
 
 ```text
 [LP]
 
-val_acc=0.76
+acc=0.xxxx
 ```
 
----
+## Decision Rule
 
-## 判断
-
-如果：
-
-```text
-LP > GCN
-```
+### LP > 0.75
 
 说明：
 
+图结构极强。
+
+后续路线：
+
 ```text
-图标签传播能力极强
+LP + GCNII
+```
+
+### LP < 0.60
+
+说明：
+
+特征主导。
+
+后续路线：
+
+```text
+MLP + LightGBM
 ```
 
 ---
 
-# Phase 8 Node2Vec
+# Phase 7: Isolated Node Modeling
+
+## Problem
+
+31%节点无邻居。
+
+GNN无法聚合信息。
+
+## Tasks
 
 新增：
 
 ```text
-models/node2vec_features.py
+features/node_stats.py
 ```
 
----
-
-## 生成
+构造：
 
 ```python
-64维
-
-128维
+degree
+is_isolated
 ```
 
-Embedding。
-
----
-
-## 拼接
+拼接：
 
 ```python
 X =
 [
-raw_feature
-node2vec
+raw_feature,
+degree,
+is_isolated
 ]
 ```
 
+## Log
+
+```text
+[ISOLATED]
+
+count=4263
+ratio=31%
+```
+
+## Deliverable
+
+Accuracy +1~3%
+
 ---
 
-## 日志
+# Phase 8: Feature Selection Integration
+
+## Problem
+
+Feature Selection可能仅用于LightGBM。
+
+GNN未使用。
+
+## Tasks
+
+修改：
+
+```python
+classification_to_pyg()
+```
+
+支持：
+
+```python
+selected_features
+```
+
+## Search Space
+
+```python
+64
+128
+256
+```
+
+## Log
+
+```text
+[FEATURE]
+
+original_dim=767
+selected_dim=128
+```
+
+## Deliverable
+
+训练加速且精度不下降。
+
+---
+
+# Phase 9: Node2Vec Features
+
+## Condition
+
+仅当：
+
+```text
+GraphSAGE > LightGBM
+```
+
+时执行。
+
+## Tasks
+
+新增：
+
+```text
+features/node2vec_feature.py
+```
+
+参数：
+
+```python
+embedding_dim:
+64
+128
+```
+
+拼接：
+
+```python
+raw_feature + node2vec
+```
+
+## Log
 
 ```text
 [NODE2VEC]
 
 dim=128
-
-walk_length=20
-
-num_walks=10
 ```
+
+## Deliverable
+
+Accuracy > 0.78
 
 ---
 
-# Phase 9 搜索框架降级
+# Phase 10: Hybrid Expert Model
 
-当前：
+## Objective
+
+区别处理：
+
+* 孤立节点
+* 非孤立节点
+
+## Architecture
 
 ```text
-Bandit
-Reflection
-Planner
+Shared Encoder
+      |
+-----------------
+|               |
+MLP         GraphSAGE
+|               |
+-----------------
+      |
+Classifier
 ```
 
-过重。
-
----
-
-## 修改
-
-前100轮实验：
+## Routing
 
 ```python
-RuleBasedSearch
+degree == 0
+
+→ MLP Branch
+
+degree > 0
+
+→ GNN Branch
 ```
 
-仅使用：
-
-```python
-Optuna
-```
-
----
-
-## 满足条件
-
-```python
-10轮无提升
-```
-
-再调用：
-
-```python
-Reflection
-```
-
----
-
-## 日志
+## Log
 
 ```text
-[SEARCH]
+[EXPERT]
 
-planner=rule
-
-reason=early_stage
+isolated=4263
+graph_nodes=9489
 ```
 
 ---
 
-# Phase 10 排行榜输出
+# Leaderboard System
 
 新增：
 
 ```text
-leaderboard.py
+output/leaderboard.csv
 ```
 
-实时记录：
+字段：
 
 ```python
+timestamp
 model
-feature
-val_acc
+feature_dim
+loss
+accuracy
+macro_f1
 runtime
 ```
 
----
-
-## 输出
+实时输出：
 
 ```text
-================================================
+================================
 
 Rank1
+GCNII16 + Focal
+Acc=0.791
 
-GCNII-32
-Feature=128
-Acc=0.8012
-
-------------------------------------------------
+--------------------------------
 
 Rank2
+GraphSAGE
+Acc=0.774
 
-LGB
-Acc=0.7864
-
-------------------------------------------------
+--------------------------------
 
 Rank3
+Hybrid
+Acc=0.624
 
-GraphSAGE
-Acc=0.7421
-
-================================================
+================================
 ```
 
 ---
 
-# Expected Result
+# Execution Order
 
-## 第一阶段
+严格按照以下顺序执行：
 
-```text
-0.50
- ->
-0.65
-```
-
-修复验证体系。
-
----
-
-## 第二阶段
-
-```text
-0.65
- ->
-0.75
-```
-
-Feature Selection + GCNII。
+1. Benchmark Framework
+2. Fixed Validation Split
+3. Weighted CE
+4. Focal Loss
+5. GraphSAGE
+6. Deep GCNII
+7. Label Propagation
+8. Isolated Node Features
+9. Feature Selection Integration
+10. Node2Vec
+11. Hybrid Expert
 
 ---
 
-## 第三阶段
+# Pause Agent Development
+
+暂时停止投入：
+
+* Bandit
+* Reflection
+* Planner
+* Knowledge Base
+* LLM Search
+
+原因：
+
+当前瓶颈是：
 
 ```text
-0.75
- ->
-0.80+
+Graph Modeling
++
+Class Imbalance
++
+Isolated Nodes
 ```
 
-Node2Vec + Deep GCNII。
+而非搜索策略。
 
----
-
-# Success Criterion
-
-达到：
-
-```text
-Val Accuracy >= 0.80
-```
-
-且：
-
-```text
-连续5次实验波动 < 1%
-```
-
-说明搜索空间和评估体系已经稳定。
+优先提升模型上限，再引入自动搜索框架。

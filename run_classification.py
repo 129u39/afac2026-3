@@ -16,7 +16,7 @@ from sklearn.utils.class_weight import compute_class_weight
 import config
 from data_loader import load_classification
 from submit import validate_A1
-from splits.fixed_split import get_fixed_split
+from utils.fixed_split import get_fixed_split
 from losses.class_balanced import compute_class_weights
 from leaderboard import Leaderboard
 
