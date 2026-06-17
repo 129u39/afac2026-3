@@ -10,13 +10,15 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import diags
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
 
 import config
 from data_loader import load_classification
 from submit import validate_A1
+from splits.fixed_split import get_fixed_split
+from losses.class_balanced import compute_class_weights
+from leaderboard import Leaderboard
 
 try:
     from llm.client import QwenClient
@@ -308,19 +310,14 @@ def main():
     raw_features, enhanced_features = _build_graph_features(data)
     train_idx = np.asarray(data["train_idx"], dtype=int)
     labels = data["labels"]
-    try:
-        train_nodes, val_nodes = train_test_split(
-            train_idx,
-            test_size=0.2,
-            random_state=42,
-            stratify=labels[train_idx],
-        )
-    except ValueError:
-        train_nodes, val_nodes = train_test_split(
-            train_idx,
-            test_size=0.2,
-            random_state=42,
-        )
+
+    # Phase 1: 使用固定验证集划分
+    train_nodes, val_nodes = get_fixed_split(
+        train_idx, labels, val_ratio=0.2, seed=42,
+    )
+
+    # Phase 2: 计算类别平衡权重（用于日志记录）
+    _ = compute_class_weights(labels[train_nodes])
 
     results: list[dict] = []
     print("\n[3] Training candidates...")
@@ -374,6 +371,16 @@ def main():
     print("\n[5] Best candidate")
     print(f"  {best['name']}")
     print(f"  val accuracy: {best['accuracy']:.4f}")
+
+    # Phase 10: 排行榜记录
+    lb = Leaderboard()
+    for r in results:
+        lb.add(
+            model_name=r["name"],
+            feature_dim=enhanced_features.shape[1],
+            val_acc=r["accuracy"],
+        )
+    lb.display()
 
     print("\n[6] Generating submission...")
     test_idx = np.asarray(data["test_idx"], dtype=int)
